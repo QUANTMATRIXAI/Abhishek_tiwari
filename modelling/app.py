@@ -1,2445 +1,3813 @@
-import io
-import os
-import re
-import sqlite3
+"""
+Standalone Elasticity Modeling App
+Single-page Streamlit application for running regression models
+"""
+
+"""
+Standalone Elasticity Modeling App
+Single-page Streamlit application for running regression models
+"""
+
+import streamlit as st
 import pandas as pd
 import numpy as np
-import streamlit as st
-import altair as alt
 import plotly.express as px
-import streamlit.components.v1 as components  # (unused, kept for future)
-import difflib, re
-# =============================
-# Simple, clean UI
-# Preview → Hierarchy (and lots of helpers under the hood)
-# =============================
+import plotly.graph_objects as go
 
-st.set_page_config(page_title="QuantMatrix AI - Data Prep & Insights", layout="wide")
+from sklearn.base import BaseEstimator, RegressorMixin, clone
+from sklearn.model_selection import KFold
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LinearRegression, Ridge, Lasso, ElasticNet, BayesianRidge
+from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 
-# Company branding header with brand colors
-col1, col2, col3 = st.columns([1, 2, 1])
-with col1:
-    st.image("1.jpg", width=100)
-with col2:
-    st.markdown(
-        """
-        <div style="
-            background: linear-gradient(135deg, #41C185 0%, #458EE2 100%);
-            padding: 2rem;
-            border-radius: 16px;
-            margin-bottom: 2rem;
-            color: white;
-            box-shadow: 0 8px 32px rgba(65, 193, 133, 0.3);
-        ">
-            <h1 style="font-size: 48px; font-weight: 700; margin: 0; color: white; font-family: 'Inter', sans-serif;">🔬 QuantMatrix AI Solutions</h1>
-            <h2 style="font-size: 32px; font-weight: 600; margin: 10px 0; color: white; font-family: 'Inter', sans-serif;">Data Preparation & Analytics Platform</h2>
-            <p style="font-size: 18px; font-weight: 400; margin: 0; color: rgba(255,255,255,0.9); font-family: 'Inter', sans-serif;">Professional-grade data processing, merging, and insights generation</p>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-with col3:
-    st.markdown("")
-    st.markdown("")
-    st.markdown("")
-    st.markdown('<p style="font-size: 14px; color: #666666; text-align: right;">Powered by Streamlit & Python</p>', unsafe_allow_html=True)
+import statsmodels.api as sm
+import warnings
+import time
 
-# QuantMatrix AI Brand Styling
-st.markdown(
-    """
-    <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-    
-    /* Global Font Family */
-    .stApp, .stMarkdown, .stButton, .stSelectbox, .stTextInput, .stNumberInput, .stCheckbox, .stExpander, .stTabs {
-        font-family: 'Inter', sans-serif !important;
-    }
-    
-    /* Main Header with Brand Colors */
-    .main-header {
-        background: linear-gradient(135deg, #41C185 0%, #458EE2 100%);
-        padding: 2rem;
-        border-radius: 16px;
-        margin-bottom: 2rem;
-        color: white;
-        box-shadow: 0 8px 32px rgba(65, 193, 133, 0.3);
-    }
-    
-    /* Metric Boxes with Brand Colors */
-    .metric-box { 
-        background: linear-gradient(135deg, #FFFFFF 0%, #F5F5F5 100%); 
-        padding: 20px 24px; 
-        border-radius: 16px; 
-        border: 2px solid #41C185;
-        box-shadow: 0 4px 16px rgba(65, 193, 133, 0.15);
-        margin: 8px;
-        transition: all 0.3s ease;
-    }
-    .metric-box:hover {
-        transform: translateY(-4px);
-        box-shadow: 0 8px 24px rgba(65, 193, 133, 0.25);
-        border-color: #458EE2;
-    }
-    
-    /* Section Headers with Brand Colors */
-    .section-header {
-        background: linear-gradient(135deg, #41C185 0%, #458EE2 100%);
-        color: white;
-        padding: 16px 24px;
-        border-radius: 12px;
-        margin: 24px 0 20px 0;
-        font-weight: 600;
-        font-size: 20px;
-        box-shadow: 0 4px 16px rgba(65, 193, 133, 0.2);
-    }
-    
-    /* Success Box with Brand Green */
-    .success-box {
-        background: linear-gradient(135deg, #41C185 0%, #4CD494 100%);
-        border: 2px solid #41C185;
-        border-radius: 12px;
-        padding: 20px;
-        margin: 16px 0;
-        color: white;
-        box-shadow: 0 4px 16px rgba(65, 193, 133, 0.2);
-    }
-    
-    /* Warning Box with Brand Yellow */
-    .warning-box {
-        background: linear-gradient(135deg, #FFBD59 0%, #FFCF87 100%);
-        border: 2px solid #FFBD59;
-        border-radius: 12px;
-        padding: 20px;
-        margin: 16px 0;
-        color: #333333;
-        box-shadow: 0 4px 16px rgba(255, 189, 89, 0.2);
-    }
-    
-    /* Info Box with Brand Blue */
-    .info-box {
-        background: linear-gradient(135deg, #458EE2 0%, #5A9EFF 100%);
-        border: 2px solid #458EE2;
-        border-radius: 12px;
-        padding: 20px;
-        margin: 16px 0;
-        color: white;
-        box-shadow: 0 4px 16px rgba(69, 142, 226, 0.2);
-    }
-    
-    /* Primary Buttons with Brand Colors */
-    .stButton > button[data-baseweb="button"] {
-        background: linear-gradient(135deg, #41C185 0%, #4CD494 100%) !important;
-        border: none !important;
-        border-radius: 12px !important;
-        padding: 12px 24px !important;
-        font-weight: 600 !important;
-        font-family: 'Inter', sans-serif !important;
-        font-size: 16px !important;
-        color: white !important;
-        transition: all 0.3s ease !important;
-        box-shadow: 0 4px 16px rgba(65, 193, 133, 0.3) !important;
-    }
-    .stButton > button[data-baseweb="button"]:hover {
-        background: linear-gradient(135deg, #3AB075 0%, #41C185 100%) !important;
-        transform: translateY(-2px) !important;
-        box-shadow: 0 8px 24px rgba(65, 193, 133, 0.4) !important;
-    }
-    
-    /* Secondary Buttons */
-    .stButton > button:not([data-baseweb="button"]) {
-        background: linear-gradient(135deg, #458EE2 0%, #5A9EFF 100%) !important;
-        border: 2px solid #458EE2 !important;
-        border-radius: 12px !important;
-        padding: 10px 20px !important;
-        font-weight: 500 !important;
-        font-family: 'Inter', sans-serif !important;
-        color: white !important;
-        transition: all 0.3s ease !important;
-    }
-    .stButton > button:not([data-baseweb="button"]):hover {
-        background: linear-gradient(135deg, #3A7BC8 0%, #458EE2 100%) !important;
-        transform: translateY(-2px) !important;
-        box-shadow: 0 6px 20px rgba(69, 142, 226, 0.3) !important;
-    }
-    
-    /* Form Controls with Brand Styling */
-    .stSelectbox > div > div {
-        border-radius: 12px !important;
-        border: 2px solid #E0E0E0 !important;
-        transition: all 0.3s ease !important;
-    }
-    .stSelectbox > div > div:hover {
-        border-color: #41C185 !important;
-        box-shadow: 0 0 0 3px rgba(65, 193, 133, 0.1) !important;
-    }
-    
-    .stTextInput > div > div > input {
-        border-radius: 12px !important;
-        border: 2px solid #E0E0E0 !important;
-        padding: 12px 16px !important;
-        font-family: 'Inter', sans-serif !important;
-        transition: all 0.3s ease !important;
-    }
-    .stTextInput > div > div > input:focus {
-        border-color: #41C185 !important;
-        box-shadow: 0 0 0 3px rgba(65, 193, 133, 0.1) !important;
-    }
-    
-    .stNumberInput > div > div > input {
-        border-radius: 12px !important;
-        border: 2px solid #E0E0E0 !important;
-        padding: 12px 16px !important;
-        font-family: 'Inter', sans-serif !important;
-        transition: all 0.3s ease !important;
-    }
-    .stNumberInput > div > div > input:focus {
-        border-color: #41C185 !important;
-        box-shadow: 0 0 0 3px rgba(65, 193, 133, 0.1) !important;
-    }
-    
-    /* Checkboxes with Brand Colors */
-    .stCheckbox > div > div {
-        border-radius: 8px !important;
-        border: 2px solid #E0E0E0 !important;
-        transition: all 0.3s ease !important;
-    }
-    .stCheckbox > div > div:hover {
-        border-color: #41C185 !important;
-    }
-    
-    /* Expanders with Brand Styling */
-    .stExpander > div > div {
-        border-radius: 16px !important;
-        border: 2px solid #E0E0E0 !important;
-        transition: all 0.3s ease !important;
-    }
-    .stExpander > div > div:hover {
-        border-color: #458EE2 !important;
-        box-shadow: 0 4px 16px rgba(69, 142, 226, 0.1) !important;
-    }
-    
-    /* Tabs with Brand Colors */
-    .stTabs > div > div > div > div {
-        border-radius: 16px 16px 0 0 !important;
-        background: #F5F5F5 !important;
-        border: 2px solid #E0E0E0 !important;
-        transition: all 0.3s ease !important;
-    }
-    .stTabs > div > div > div > div[aria-selected="true"] {
-        background: linear-gradient(135deg, #41C185 0%, #4CD494 100%) !important;
-        color: white !important;
-        border-color: #41C185 !important;
-    }
-    
-    /* Radio Buttons with Brand Colors */
-    .stRadio > div > div > label {
-        font-family: 'Inter', sans-serif !important;
-        font-weight: 500 !important;
-        color: #333333 !important;
-    }
-    
-    /* Multiselect with Brand Styling */
-    .stMultiSelect > div > div {
-        border-radius: 12px !important;
-        border: 2px solid #E0E0E0 !important;
-        transition: all 0.3s ease !important;
-    }
-    .stMultiSelect > div > div:hover {
-        border-color: #41C185 !important;
-        box-shadow: 0 0 0 3px rgba(65, 193, 133, 0.1) !important;
-    }
-    
-    /* Dataframe Styling */
-    .stDataFrame {
-        border-radius: 12px !important;
-        border: 2px solid #E0E0E0 !important;
-        overflow: hidden !important;
-    }
-    
-    /* Custom Brand Elements */
-    .brand-gradient {
-        background: linear-gradient(135deg, #41C185 0%, #458EE2 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        background-clip: text;
-    }
-    
-    .brand-accent {
-        color: #FFBD59;
-        font-weight: 600;
-    }
-    
-    /* Responsive Design */
-    @media (max-width: 768px) {
-        .metric-box {
-            padding: 16px 20px;
-            margin: 6px;
-        }
-        .section-header {
-            padding: 12px 20px;
-            font-size: 18px;
-        }
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+warnings.filterwarnings('ignore')
 
-# -------- Helpers --------
 
-@st.cache_data(show_spinner=False, ttl=3600)  # Cache for 1 hour
-def _read_from_bytes(data: bytes, filetype: str, sheet_name: str | int | None) -> pd.DataFrame:
-    if filetype == "csv":
-        return pd.read_csv(io.BytesIO(data), low_memory=False)
-    else:
-        xls = pd.ExcelFile(io.BytesIO(data))
-        use_sheet = sheet_name if sheet_name is not None else 0
-        return pd.read_excel(xls, sheet_name=use_sheet)
+warnings.filterwarnings('ignore')
 
-@st.cache_data(show_spinner=False, ttl=1800)  # Cache for 30 minutes
-def quick_stats(df: pd.DataFrame) -> pd.DataFrame:
-    # Only compute stats for first 10000 rows for performance
-    sample_df = df.head(10000) if len(df) > 10000 else df
-    stats = pd.DataFrame({
-        "dtype": sample_df.dtypes.astype(str),
-        "non_null": sample_df.notna().sum(),
-        "nulls": sample_df.isna().sum(),
-        "% null": (sample_df.isna().mean() * 100).round(2),
-        "nunique": sample_df.nunique(dropna=True),
-    }).reset_index(names=["column"]).sort_values(["% null", "column"], ascending=[False, True])
-    return stats
+# ═══════════════════════════════════════════════════════════════════════════
+# MODEL CLASSES
+# ═══════════════════════════════════════════════════════════════════════════
 
-def duplicate_name_table(df: pd.DataFrame) -> pd.DataFrame:
-    cols = list(df.columns)
-    s = pd.Series(cols)
-    dupes = s.duplicated(keep=False)
-    return pd.DataFrame({
-        "#": range(1, len(cols) + 1),
-        "column": cols,
-        "duplicate_name": dupes.map({True: "Yes", False: "No"})
-    })
+class CustomConstrainedRidge(BaseEstimator, RegressorMixin):
+    """Ridge regression with coefficient sign constraints"""
+    
+    def __init__(self, l2_penalty=0.1, learning_rate=0.001, iterations=10000,
+                adam=False, beta1=0.9, beta2=0.999, epsilon=1e-8,
+                non_positive_features=None, non_negative_features=None):
+        self.learning_rate = learning_rate
+        self.iterations = iterations
+        self.l2_penalty = l2_penalty
+        self.adam = adam
+        self.beta1 = beta1
+        self.beta2 = beta2
+        self.epsilon = epsilon
+        # Store as tuples for sklearn compatibility (immutable)
+        self.non_positive_features = tuple(non_positive_features) if non_positive_features else ()
+        self.non_negative_features = tuple(non_negative_features) if non_negative_features else ()
 
-def _clean_colname(name: object) -> str:
-    if pd.isna(name):
-        base = ""
-    else:
-        base = str(name)
-    base = base.strip()
-    # Treat Unnamed columns as empty
-    if re.fullmatch(r"Unnamed: ?\d+", base, flags=re.I):
-        base = ""
-    # Replace non-alphanumeric with underscores and lowercase
-    base = re.sub(r"[^0-9A-Za-z]+", "_", base)
-    base = re.sub(r"_+", "_", base).strip("_")
-    return base.lower()
+    def fit(self, X, Y, feature_names):
+        self.m, self.n = X.shape
+        self.W = np.zeros(self.n)
+        self.b = 0
+        self.X = X
+        self.Y = Y
+        self.feature_names = feature_names
+        
+        configured_non_positive = set(self.non_positive_features) if self.non_positive_features else set()
+        configured_non_negative = set(self.non_negative_features) if self.non_negative_features else set()
+        
+        self._non_positive_feature_names = {name for name in feature_names if name in configured_non_positive}
+        self._non_negative_feature_names = {name for name in feature_names if name in configured_non_negative}
+        self._non_positive_indices = [i for i, name in enumerate(feature_names) if name in self._non_positive_feature_names]
+        self._non_negative_indices = [i for i, name in enumerate(feature_names) if name in self._non_negative_feature_names]
+        # Don't modify constructor parameters - use internal attributes only
 
-def dedupe_columns(cols: list[str]) -> list[str]:
-    out: list[str] = []
-    seen: dict[str, int] = {}
-    for i, c in enumerate(cols):
-        c2 = _clean_colname(c)
-        if not c2:
-            c2 = f"col_{i+1}"
-        if c2 in seen:
-            seen[c2] += 1
-            c2 = f"{c2}_{seen[c2]}"
+        if self.adam:
+            self.m_W = np.zeros(self.n)
+            self.v_W = np.zeros(self.n)
+            self.m_b = 0
+            self.v_b = 0
+            self.t = 0
+
+        for _ in range(self.iterations):
+            self.update_weights()
+
+        self.intercept_ = self.b
+        self.coef_ = self.W
+        return self
+
+    def update_weights(self):
+        Y_pred = self.predict(self.X)
+        grad_w = (-(2 * (self.X.T).dot(self.Y - Y_pred)) + 2 * self.l2_penalty * self.W) / self.m
+        grad_b = -(2 / self.m) * np.sum(self.Y - Y_pred)
+
+        if self.adam:
+            self.t += 1
+            self.m_W = self.beta1 * self.m_W + (1 - self.beta1) * grad_w
+            self.m_b = self.beta1 * self.m_b + (1 - self.beta1) * grad_b
+            self.v_W = self.beta2 * self.v_W + (1 - self.beta2) * (grad_w ** 2)
+            self.v_b = self.beta2 * self.v_b + (1 - self.beta2) * (grad_b ** 2)
+
+            m_W_hat = self.m_W / (1 - self.beta1 ** self.t)
+            m_b_hat = self.m_b / (1 - self.beta1 ** self.t)
+            v_W_hat = self.v_W / (1 - self.beta2 ** self.t)
+            v_b_hat = self.v_b / (1 - self.beta2 ** self.t)
+
+            self.W -= self.learning_rate * m_W_hat / (np.sqrt(v_W_hat) + self.epsilon)
+            self.b -= self.learning_rate * m_b_hat / (np.sqrt(v_b_hat) + self.epsilon)
         else:
-            seen[c2] = 0
-        out.append(c2)
-    return out
+            self.W -= self.learning_rate * grad_w
+            self.b -= self.learning_rate * grad_b
+
+        if getattr(self, '_non_positive_indices', []):
+            self.W[self._non_positive_indices] = np.minimum(self.W[self._non_positive_indices], 0)
+        if getattr(self, '_non_negative_indices', []):
+            self.W[self._non_negative_indices] = np.maximum(self.W[self._non_negative_indices], 0)
+
+    def predict(self, X):
+        return X.dot(self.W) + self.b
 
 
+class ConstrainedLinearRegression(BaseEstimator, RegressorMixin):
+    """Linear regression with coefficient sign constraints"""
+    
+    def __init__(self, learning_rate=0.001, iterations=10000,
+                adam=False, beta1=0.9, beta2=0.999, epsilon=1e-8,
+                non_positive_features=None, non_negative_features=None):
+        self.learning_rate = learning_rate
+        self.iterations = iterations
+        self.adam = adam
+        self.beta1 = beta1
+        self.beta2 = beta2
+        self.epsilon = epsilon
+        # Store as tuples for sklearn compatibility (immutable)
+        self.non_positive_features = tuple(non_positive_features) if non_positive_features else ()
+        self.non_negative_features = tuple(non_negative_features) if non_negative_features else ()
 
-# ---------- Preview filter UI helpers ----------
-INT64_MAX = 2**63 - 1
-INT64_MIN = -2**63
+    def fit(self, X, Y, feature_names):
+        self.m, self.n = X.shape
+        self.W = np.zeros(self.n)
+        self.b = 0
+        self.X = X
+        self.Y = Y
+        self.feature_names = feature_names
+        
+        configured_non_positive = set(self.non_positive_features) if self.non_positive_features else set()
+        configured_non_negative = set(self.non_negative_features) if self.non_negative_features else set()
+        
+        self._non_positive_feature_names = {name for name in feature_names if name in configured_non_positive}
+        self._non_negative_feature_names = {name for name in feature_names if name in configured_non_negative}
+        self._non_positive_indices = [i for i, name in enumerate(feature_names) if name in self._non_positive_feature_names]
+        self._non_negative_indices = [i for i, name in enumerate(feature_names) if name in self._non_negative_feature_names]
+        # Don't modify constructor parameters - use internal attributes only
 
-def _column_exceeds_int64_bounds(ser: pd.Series) -> bool:
-    try:
-        if pd.api.types.is_integer_dtype(ser) or pd.api.types.is_float_dtype(ser):
-            nums = pd.to_numeric(ser, errors='coerce')
+        if self.adam:
+            self.m_W = np.zeros(self.n)
+            self.v_W = np.zeros(self.n)
+            self.m_b = 0
+            self.v_b = 0
+            self.t = 0
+
+        for _ in range(self.iterations):
+            self.update_weights()
+
+        self.intercept_ = self.b
+        self.coef_ = self.W
+        return self
+
+    def update_weights(self):
+        Y_pred = self.predict(self.X)
+        dW = -(2 * self.X.T.dot(self.Y - Y_pred)) / self.m
+        db = -2 * np.sum(self.Y - Y_pred) / self.m
+
+        if self.adam:
+            self.t += 1
+            self.m_W = self.beta1 * self.m_W + (1 - self.beta1) * dW
+            self.m_b = self.beta1 * self.m_b + (1 - self.beta1) * db
+            self.v_W = self.beta2 * self.v_W + (1 - self.beta2) * (dW ** 2)
+            self.v_b = self.beta2 * self.v_b + (1 - self.beta2) * (db ** 2)
+
+            m_W_hat = self.m_W / (1 - self.beta1 ** self.t)
+            m_b_hat = self.m_b / (1 - self.beta1 ** self.t)
+            v_W_hat = self.v_W / (1 - self.beta2 ** self.t)
+            v_b_hat = self.v_b / (1 - self.beta2 ** self.t)
+
+            self.W -= self.learning_rate * m_W_hat / (np.sqrt(v_W_hat) + self.epsilon)
+            self.b -= self.learning_rate * m_b_hat / (np.sqrt(v_b_hat) + self.epsilon)
         else:
-            nums = pd.to_numeric(ser, errors='coerce')
-        if nums.empty:
-            return False
-        mx, mn = nums.max(skipna=True), nums.min(skipna=True)
-        if pd.isna(mx) and pd.isna(mn):
-            return False
-        return (pd.notna(mx) and mx > INT64_MAX) or (pd.notna(mn) and mn < INT64_MIN)
-    except Exception:
-        return False
+            self.W -= self.learning_rate * dW
+            self.b -= self.learning_rate * db
 
-def make_arrow_safe_preview(df: pd.DataFrame, n: int = 100) -> pd.DataFrame:
-    if df is None or df.empty:
-        return df
-    preview = df.head(n).copy()
-    for col in preview.columns:
-        ser = preview[col]
-        if _column_exceeds_int64_bounds(ser):
-            preview[col] = ser.astype(str)
-    if _column_exceeds_int64_bounds(preview.index.to_series()):
-        preview = preview.reset_index(drop=True)
-    return preview
+        if getattr(self, '_non_positive_indices', []):
+            self.W[self._non_positive_indices] = np.minimum(self.W[self._non_positive_indices], 0)
+        if getattr(self, '_non_negative_indices', []):
+            self.W[self._non_negative_indices] = np.maximum(self.W[self._non_negative_indices], 0)
 
-def st_dataframe_safe(df: pd.DataFrame, n: int = 100, **kwargs) -> None:
-    safe = make_arrow_safe_preview(df, n=n)
-    st.dataframe(safe, **kwargs)
+    def predict(self, X):
+        return X.dot(self.W) + self.b
 
-def _is_datetime_series(ser: pd.Series) -> bool:
-    if pd.api.types.is_datetime64_any_dtype(ser):
-        return True
-    if ser.dtype == object:
-        # try a small sample to avoid heavy parse on huge columns
-        sample = ser.dropna().astype(str).head(200)
-        if sample.empty:
-            return False
-        parsed = pd.to_datetime(sample, errors='coerce')
-        return parsed.notna().mean() >= 0.8
-    return False
 
-@st.cache_data(show_spinner=False, ttl=1800)  # Cache for 30 minutes
-def get_unique_values(df_hash, col_name):
-    """Cache unique values for faster filtering"""
-    # This is a workaround - we pass a hash of the dataframe
-    # In real usage, the df would be passed directly
-    return None
-
-@st.cache_data(show_spinner=False, ttl=1800)  # Cache for 30 minutes
-def _get_filter_options(df: pd.DataFrame, col_name: str):
-    """Cache filter options to avoid recalculation"""
-    if col_name not in df.columns:
-        return None, None, None
+class StackedInteractionModel(BaseEstimator, RegressorMixin):
+    """Stacked model with interaction terms for group-specific coefficients"""
     
-    ser = df[col_name]
-    
-    # For categorical/text columns
-    if not pd.api.types.is_numeric_dtype(ser):
-        # Limit unique values for performance
-        unique_vals = ser.dropna().unique()
-        if len(unique_vals) > 1000:
-            unique_vals = unique_vals[:1000]  # Limit to first 1000 for performance
-        return "categorical", sorted(unique_vals.tolist()), None
-    
-    # For numeric columns
-    nums = pd.to_numeric(ser, errors="coerce")
-    nmin = float(nums.min(skipna=True)) if nums.notna().any() else 0.0
-    nmax = float(nums.max(skipna=True)) if nums.notna().any() else 0.0
-    return "numeric", nmin, nmax
-
-def _build_filters_ui(df: pd.DataFrame, key_prefix: str) -> pd.DataFrame:
-    """
-    Multi-filter UI that applies only when the user clicks 'Apply filters'.
-    Controls are arranged in columns for better UX.
-    """
-    if df is None or df.empty:
-        return df
-
-    draft_key = f"{key_prefix}_filters_draft"
-    applied_key = f"{key_prefix}_filters_applied"
-    st.session_state.setdefault(draft_key, {})
-    st.session_state.setdefault(applied_key, {})
-
-    with st.expander("🔍 Multi-Filter", expanded=False):
-        # Step 1 (outside the form so selecting columns can update the UI layout):
-        filter_cols = st.multiselect(
-            "Select columns to filter:",
-            options=list(df.columns),
-            key=f"{key_prefix}_filter_cols",
-            help="Select multiple columns, then set values and click 'Apply filters'"
+    def __init__(self, base_model, group_keys, enforce_combined_constraints=False):
+        self.base_model = base_model
+        self.group_keys = group_keys
+        self.enforce_combined_constraints = enforce_combined_constraints
+        self.group_mapping = None
+        self.feature_names = None
+        self.fitted_model = None
+        self.base_features_count = None
+        
+    def fit(self, X, y, feature_names=None, groups_df=None):
+        self.feature_names = feature_names if feature_names is not None else (
+            list(X.columns) if hasattr(X, 'columns') else [f"X{i}" for i in range(X.shape[1])]
         )
-
-        # Step 2 (inside a form; changes are applied only on submit):
-        draft: dict = st.session_state[draft_key]
-        apply_filters = False
-        clear_filters = False
-        with st.form(f"{key_prefix}_filter_form", clear_on_submit=False):
-            if filter_cols:
-                grid = st.columns(3)
-                for i, col in enumerate(filter_cols):
-                    with grid[i % 3]:
-                        st.markdown(f"**{col}**")
-                        ftype, fvals, frange = _get_filter_options(df, col)
-
-                        if ftype == "categorical" and fvals and len(fvals) <= 1000:
-                            prev = draft.get(col, {}).get("values", [])
-                            sel = st.multiselect(
-                                "Values",
-                                options=fvals,
-                                default=prev,
-                                key=f"{key_prefix}_vals_{col}"
-                            )
-                            draft[col] = {"type": "categorical", "values": sel}
-                        elif ftype == "numeric" and frange is not None:
-                            nmin, nmax = frange
-                            prev = draft.get(col, {})
-                            vmin = st.number_input(
-                                "Min",
-                                min_value=float(nmin),
-                                max_value=float(nmax),
-                                value=float(prev.get("min", nmin)),
-                                key=f"{key_prefix}_min_{col}"
-                            )
-                            vmax = st.number_input(
-                                "Max",
-                                min_value=float(vmin),
-                                max_value=float(nmax),
-                                value=float(prev.get("max", nmax)),
-                                key=f"{key_prefix}_max_{col}"
-                            )
-                            draft[col] = {"type": "numeric", "min": vmin, "max": vmax}
-                        else:
-                            prev = draft.get(col, {}).get("search", "")
-                            term = st.text_input(
-                                "Search",
-                                value=str(prev),
-                                key=f"{key_prefix}_search_{col}"
-                            )
-                            draft[col] = {"type": "search", "search": term}
-
-            c1, c2, _ = st.columns([1, 1, 3])
-            with c1:
-                apply_filters = st.form_submit_button("Apply filters", type="primary", disabled=not bool(filter_cols))
-            with c2:
-                clear_filters = st.form_submit_button("Clear", disabled=not bool(st.session_state[applied_key]))
-
-        # Update applied filters only after submit
-        if apply_filters:
-            st.session_state[applied_key] = st.session_state[draft_key].copy()
-        if clear_filters:
-            st.session_state[draft_key] = {}
-            st.session_state[applied_key] = {}
-
-        # Apply currently applied filters
-        filtered = df.copy()
-        info = []
-        for col, spec in st.session_state[applied_key].items():
-            if col not in filtered.columns:
-                continue
-            if spec.get("type") == "categorical" and spec.get("values"):
-                filtered = filtered[filtered[col].isin(spec["values"])]
-                info.append(f"{col}: {len(spec['values'])} values")
-            elif spec.get("type") == "numeric":
-                vmin = spec.get("min")
-                vmax = spec.get("max")
-                if vmin is not None and vmax is not None:
-                    filtered = filtered[(filtered[col] >= vmin) & (filtered[col] <= vmax)]
-                    info.append(f"{col}: {vmin}–{vmax}")
-            elif spec.get("type") == "search" and spec.get("search"):
-                term = str(spec.get("search", ""))
-                filtered = filtered[filtered[col].astype(str).str.contains(term, case=False, na=False)]
-                info.append(f"{col}: contains '{term}'")
-
-        if info:
-            st.success(f"✅ **Filters Applied:** {' | '.join(info)}")
-            st.caption(f"📊 **Result:** **{len(filtered):,}** / {len(df):,} rows ({(len(filtered)/len(df)*100):.1f}%)")
-
-        return filtered
-
-
-def _col_kind(s: pd.Series) -> str:
-    try:
-        if pd.api.types.is_datetime64_any_dtype(s):
-            return "datetime"
-        if pd.api.types.is_numeric_dtype(s):
-            return "numeric"
-    except Exception:
-        pass
-    return "string"
-
-def _norm_name(name: str) -> str:
-    if name is None:
-        return ""
-    # normalize like your merge normalizer would
-    n = re.sub(r"[^0-9a-zA-Z]+", " ", str(name).strip().lower())
-    n = re.sub(r"\s+", " ", n).strip()
-    # common suffix/prefix noise
-    n = re.sub(r"\b(id|code|key|no|num|number)\b", "", n).strip()
-    return n
-
-def _normalize_series_for_join(s: pd.Series, kind: str) -> pd.Series:
-    if kind == "numeric":
-        # integers as-is; floats rounded for stable equality
-        if pd.api.types.is_float_dtype(s):
-            return pd.to_numeric(s, errors="coerce").round(6)
-        return pd.to_numeric(s, errors="coerce")
-    if kind == "datetime":
-        # coerce and drop time part for robust matching
-        return pd.to_datetime(s, errors="coerce").dt.date.astype("string")
-    # string-ish
-    s = s.astype("string")
-    s = s.str.strip().str.lower()
-    s = s.replace({"": pd.NA})
-    return s
-
-def _value_sets(s: pd.Series, unique_cap: int = 50000) -> set:
-    """Return a set of unique non-null values (capped for performance)."""
-    vals = pd.unique(s.dropna())
-    # cap uniques for big columns
-    if len(vals) > unique_cap:
-        rng = np.random.default_rng(0)
-        idx = rng.choice(len(vals), size=unique_cap, replace=False)
-        vals = vals[idx]
-    return set(vals.tolist())
-
-def _jaccard_and_cover(a: set, b: set) -> tuple[float, float, float]:
-    if not a and not b:
-        return 0.0, 0.0, 0.0
-    inter = len(a & b)
-    union = len(a | b) or 1
-    jacc = inter / union
-    left_cov = inter / (len(a) or 1)
-    right_cov = inter / (len(b) or 1)
-    return jacc, left_cov, right_cov
-
-def _relation_guess(left_uni_ratio: float, right_uni_ratio: float) -> str:
-    l = left_uni_ratio >= 0.9
-    r = right_uni_ratio >= 0.9
-    if l and r: return "1:1"
-    if l and not r: return "1:M"
-    if not l and r: return "M:1"
-    return "M:M"
-
-def suggest_join_keys(
-    left_df: pd.DataFrame,
-    right_df: pd.DataFrame,
-    top_k: int = 20,
-    only_viable: bool = True,
-) -> pd.DataFrame:
-    """
-    Return a ranked DataFrame of candidate join keys between left_df and right_df.
-    Columns: left_col, right_col, score, name_sim, jaccard, left_cov, right_cov,
-             left_uni_ratio, right_uni_ratio, type_pair, relation_guess
-    """
-    results = []
-    # lightweight precompute
-    left_len  = max(len(left_df), 1)
-    right_len = max(len(right_df), 1)
-
-    # choose a manageable set of columns (exclude all-null)
-    left_cols  = [c for c in left_df.columns if left_df[c].notna().any()]
-    right_cols = [c for c in right_df.columns if right_df[c].notna().any()]
-
-    # basic pruning: pair columns with compatible kinds OR similar names
-    left_kinds  = {c: _col_kind(left_df[c])  for c in left_cols}
-    right_kinds = {c: _col_kind(right_df[c]) for c in right_cols}
-    name_norm_l = {c: _norm_name(c) for c in left_cols}
-    name_norm_r = {c: _norm_name(c) for c in right_cols}
-
-    # cache normalized series & unique sets
-    norm_left  = {}
-    norm_right = {}
-    uniq_left  = {}
-    uniq_right = {}
-
-    for lc in left_cols:
-        kind = left_kinds[lc]
-        s = _normalize_series_for_join(left_df[lc], kind)
-        norm_left[lc] = s
-        uniq_left[lc] = _value_sets(s)
-
-    for rc in right_cols:
-        kind = right_kinds[rc]
-        s = _normalize_series_for_join(right_df[rc], kind)
-        norm_right[rc] = s
-        uniq_right[rc] = _value_sets(s)
-
-    for lc in left_cols:
-        for rc in right_cols:
-            lk, rk = left_kinds[lc], right_kinds[rc]
-            type_compat = 1.0 if lk == rk else 0.7 if {"numeric","string"} == {lk, rk} else 0.6 if {"datetime","string"} == {lk, rk} else 0.5
-
-            name_sim = difflib.SequenceMatcher(None, name_norm_l[lc], name_norm_r[rc]).ratio()
-
-            # prune clearly unlikely pairs unless names look similar
-            if lk != rk and name_sim < 0.55 and type_compat < 0.7:
-                continue
-
-            a, b = uniq_left[lc], uniq_right[rc]
-            jacc, lcov, rcov = _jaccard_and_cover(a, b)
-
-            # coverage too tiny? skip unless names are very similar
-            if only_viable and (lcov < 0.03 and rcov < 0.03) and name_sim < 0.85:
-                continue
-
-            # uniqueness heuristics
-            l_uni = left_df[lc].nunique(dropna=True) / left_len
-            r_uni = right_df[rc].nunique(dropna=True) / right_len
-            rel = _relation_guess(l_uni, r_uni)
-
-            # relation weighting (prefer 1:1 or 1:M / M:1)
-            rel_w = 1.00 if rel == "1:1" else 0.95 if rel in ("1:M","M:1") else 0.85
-
-            # final score (0..1)
-            score = (
-                0.55 * jacc +
-                0.25 * ((lcov + rcov) / 2.0) +
-                0.15 * name_sim +
-                0.05 * type_compat
-            ) * rel_w
-
-            results.append({
-                "left_col": lc, "right_col": rc,
-                "score": round(float(score), 6),
-                "name_sim": round(float(name_sim), 4),
-                "jaccard": round(float(jacc), 4),
-                "left_cov": round(float(lcov), 4),
-                "right_cov": round(float(rcov), 4),
-                "left_uni_ratio": round(float(l_uni), 4),
-                "right_uni_ratio": round(float(r_uni), 4),
-                "type_pair": f"{lk}-{rk}",
-                "relation_guess": rel,
-            })
-
-    if not results:
-        return pd.DataFrame(columns=[
-            "left_col","right_col","score","name_sim","jaccard","left_cov","right_cov",
-            "left_uni_ratio","right_uni_ratio","type_pair","relation_guess"
-        ])
-
-    out = pd.DataFrame(results).sort_values(["score","jaccard","name_sim"], ascending=[False, False, False])
-    # keep top_k distinct left/right pairs by best score
-    out = out.head(top_k).reset_index(drop=True)
-    return out
-# ----------------------------------------------------------------------------- 
-
-
-
-# -------- Reading --------
-@st.cache_data(show_spinner=False)
-def read_tabular_file(
-    file, *,
-    filetype: str,
-    sheet_name: str | int | None,
-) -> pd.DataFrame:
-    """Read CSV/XLSX with default assumptions and clean/dedupe columns."""
-    data = file.getvalue() if hasattr(file, "getvalue") else file.read()
-    df = _read_from_bytes(data, filetype, sheet_name)
-    df = df.loc[:, df.notna().any(axis=0)]
-    df.columns = dedupe_columns(list(df.columns))
-    return df
-
-# ---- Arrow-safe display helpers (fix OverflowError during st.dataframe) ----
-INT64_MAX = 2**63 - 1
-INT64_MIN = -2**63
-
-def _column_exceeds_int64_bounds(ser: pd.Series) -> bool:
-    """Return True if any numeric values in the Series exceed Arrow int64 bounds."""
-    try:
-        if pd.api.types.is_integer_dtype(ser) or pd.api.types.is_float_dtype(ser):
-            # Fast path for numeric dtypes
-            with np.errstate(over='ignore'):
-                max_v = pd.to_numeric(ser, errors='coerce').max(skipna=True)
-                min_v = pd.to_numeric(ser, errors='coerce').min(skipna=True)
+        self.base_features_count = len(self.feature_names)
+        
+        if groups_df is None:
+            raise ValueError("groups_df is required for stacked models")
+        
+        if not self.group_keys:
+            self.fitted_model = clone(self.base_model)
+            if isinstance(self.fitted_model, (CustomConstrainedRidge, ConstrainedLinearRegression)):
+                self.fitted_model.fit(X, y, self.feature_names)
+            else:
+                self.fitted_model.fit(X, y)
+            self.group_mapping = {}
+            return self
+            
+        missing_keys = [k for k in self.group_keys if k not in groups_df.columns]
+        if missing_keys:
+            raise ValueError(f"Group keys {missing_keys} not found in groups_df")
+            
+        if len(self.group_keys) == 1:
+            group_combinations = groups_df[self.group_keys[0]].astype(str)
         else:
-            # Object/mixed: inspect numeric view
-            nums = pd.to_numeric(ser, errors='coerce')
-            max_v = nums.max(skipna=True)
-            min_v = nums.min(skipna=True)
-        if pd.isna(max_v) and pd.isna(min_v):
-            return False
-        return (pd.notna(max_v) and max_v > INT64_MAX) or (pd.notna(min_v) and min_v < INT64_MIN)
-    except Exception:
-        return False
+            group_data = groups_df[self.group_keys].astype(str)
+            group_combinations = group_data.apply(lambda row: "_".join(row), axis=1)
+            
+        unique_groups = sorted(group_combinations.unique())
+        
+        if len(unique_groups) == 1:
+            self.fitted_model = clone(self.base_model)
+            if isinstance(self.fitted_model, (CustomConstrainedRidge, ConstrainedLinearRegression)):
+                self.fitted_model.fit(X, y, self.feature_names)
+            else:
+                self.fitted_model.fit(X, y)
+            self.group_mapping = {unique_groups[0]: 0}
+            self.reference_group = unique_groups[0]
+            return self
+        
+        self.group_mapping = {group: idx for idx, group in enumerate(unique_groups)}
+        self.reference_group = unique_groups[0]
+        
+        dummy_matrix = np.zeros((len(X), len(unique_groups) - 1))
+        for i, group in enumerate(group_combinations):
+            group_idx = self.group_mapping[group]
+            if group_idx > 0:
+                dummy_matrix[i, group_idx - 1] = 1
+        
+        X_array = X.values if hasattr(X, 'values') else X
+        interaction_features = []
+        interaction_names = []
+        
+        for j, feat_name in enumerate(self.feature_names):
+            for k in range(len(unique_groups) - 1):
+                interaction = X_array[:, j] * dummy_matrix[:, k]
+                interaction_features.append(interaction)
+                group_name = unique_groups[k + 1]
+                interaction_names.append(f"{feat_name}*{group_name}")
+        
+        X_stacked = np.hstack([
+            X_array,
+            dummy_matrix,
+            np.column_stack(interaction_features) if interaction_features else np.empty((len(X), 0))
+        ])
+        
+        dummy_names = [f"dummy_{unique_groups[i+1]}" for i in range(len(unique_groups) - 1)]
+        self.all_feature_names = self.feature_names + dummy_names + interaction_names
+        
+        if isinstance(self.base_model, (CustomConstrainedRidge, ConstrainedLinearRegression)):
+            self.fitted_model = self._fit_with_combined_constraints(X_stacked, y, unique_groups)
+        else:
+            self.fitted_model = clone(self.base_model)
+            self.fitted_model.fit(X_stacked, y)
+        
+        return self
+    
+    def _fit_with_combined_constraints(self, X_stacked, y, unique_groups):
+        model = clone(self.base_model)
+        
+        if self.enforce_combined_constraints:
+            model._parent_stacked = self
+            model._unique_groups = unique_groups
+        
+        if isinstance(model, (CustomConstrainedRidge, ConstrainedLinearRegression)):
+            model.fit(X_stacked, y, self.all_feature_names)
+        else:
+            model.fit(X_stacked, y)
+        
+        try:
+            if self.enforce_combined_constraints and isinstance(model, CustomConstrainedRidge):
+                parent = self
+                n_base = parent.base_features_count
+                n_groups = len(unique_groups)
+                
+                negative_feature_names = set(getattr(model, '_non_positive_feature_names', set()))
+                positive_feature_names = set(getattr(model, '_non_negative_feature_names', set()))
+                
+                for g_idx in range(n_groups):
+                    for f_idx, feat_name in enumerate(parent.feature_names[:n_base]):
+                        combined_coef = model.W[f_idx]
+                        interaction_idx = None
+                        
+                        if g_idx > 0:
+                            interaction_idx = n_base + (n_groups - 1) + (g_idx - 1) * n_base + f_idx
+                            if interaction_idx < len(model.W):
+                                combined_coef += model.W[interaction_idx]
+                        
+                        if feat_name in negative_feature_names:
+                            if combined_coef > 0:
+                                if g_idx == 0:
+                                    model.W[f_idx] = 0
+                                else:
+                                    correction = -combined_coef / 2
+                                    model.W[f_idx] += correction
+                                    if interaction_idx is not None and interaction_idx < len(model.W):
+                                        model.W[interaction_idx] += correction
+                        
+                        elif feat_name in positive_feature_names:
+                            if combined_coef < 0:
+                                if g_idx == 0:
+                                    model.W[f_idx] = 0
+                                else:
+                                    correction = -combined_coef / 2
+                                    model.W[f_idx] += correction
+                                    if interaction_idx is not None and interaction_idx < len(model.W):
+                                        model.W[interaction_idx] += correction
+        except Exception:
+            pass
 
-def make_arrow_safe_preview(df: pd.DataFrame, n: int = 100) -> pd.DataFrame:
-    """Return a head(n) that is safe for Arrow by casting out-of-range integer columns to str."""
-    if df is None or df.empty:
-        return df
-    preview = df.head(n).copy()
-    for col in preview.columns:
-        ser = preview[col]
-        if _column_exceeds_int64_bounds(ser):
-            preview[col] = ser.astype(str)
-    # Also make sure the index won't trip Arrow if it's giant integers
-    if _column_exceeds_int64_bounds(preview.index.to_series()):
-        preview = preview.reset_index(drop=True)
-    return preview
+        return model
+    
+    def predict(self, X, groups_df=None):
+        if groups_df is None:
+            raise ValueError("groups_df is required for prediction")
+        
+        if not self.group_keys or not self.group_mapping:
+            return self.fitted_model.predict(X)
+            
+        if len(self.group_mapping) == 1:
+            return self.fitted_model.predict(X)
+            
+        if len(self.group_keys) == 1:
+            group_combinations = groups_df[self.group_keys[0]].astype(str)
+        else:
+            group_data = groups_df[self.group_keys].astype(str)
+            group_combinations = group_data.apply(lambda row: "_".join(row), axis=1)
+        
+        dummy_matrix = np.zeros((len(X), len(self.group_mapping) - 1))
+        for i, group in enumerate(group_combinations):
+            if group in self.group_mapping:
+                group_idx = self.group_mapping[group]
+                if group_idx > 0:
+                    dummy_matrix[i, group_idx - 1] = 1
+        
+        X_array = X.values if hasattr(X, 'values') else X
+        interaction_features = []
+        
+        for j in range(X_array.shape[1]):
+            for k in range(len(self.group_mapping) - 1):
+                interaction = X_array[:, j] * dummy_matrix[:, k]
+                interaction_features.append(interaction)
+        
+        X_stacked = np.hstack([
+            X_array,
+            dummy_matrix,
+            np.column_stack(interaction_features) if interaction_features else np.empty((len(X), 0))
+        ])
+        
+        return self.fitted_model.predict(X_stacked)
+    
+    def get_group_coefficients(self):
+        if not hasattr(self.fitted_model, 'coef_'):
+            return None
+        
+        if not self.group_keys or not self.group_mapping:
+            return {
+                'base': {
+                    'intercept': self.fitted_model.intercept_,
+                    'coefficients': dict(zip(self.feature_names, self.fitted_model.coef_[:self.base_features_count]))
+                }
+            }
+            
+        if len(self.group_mapping) == 1:
+            group_name = list(self.group_mapping.keys())[0]
+            return {
+                group_name: {
+                    'intercept': self.fitted_model.intercept_,
+                    'coefficients': dict(zip(self.feature_names, self.fitted_model.coef_[:self.base_features_count]))
+                }
+            }
+            
+        coef_dict = {}
+        n_features = len(self.feature_names)
+        n_groups = len(self.group_mapping)
+        
+        sorted_groups = sorted(self.group_mapping.keys(), key=lambda x: self.group_mapping[x])
+        
+        for group_idx, group_name in enumerate(sorted_groups):
+            combined_coefs = {}
+            combined_intercept = self.fitted_model.intercept_
+            
+            if group_idx > 0:
+                dummy_idx = n_features + group_idx - 1
+                if dummy_idx < len(self.fitted_model.coef_):
+                    combined_intercept += self.fitted_model.coef_[dummy_idx]
+            
+            for j, feat_name in enumerate(self.feature_names):
+                base_coef = self.fitted_model.coef_[j]
+                
+                if group_idx > 0:
+                    interaction_idx = n_features + (n_groups - 1) + (group_idx - 1) * n_features + j
+                    if interaction_idx < len(self.fitted_model.coef_):
+                        interaction_coef = self.fitted_model.coef_[interaction_idx]
+                        combined_coefs[feat_name] = base_coef + interaction_coef
+                    else:
+                        combined_coefs[feat_name] = base_coef
+                else:
+                    combined_coefs[feat_name] = base_coef
+            
+            coef_dict[group_name] = {
+                'intercept': combined_intercept,
+                'coefficients': combined_coefs
+            }
+        
+        return coef_dict
 
-def st_dataframe_safe(df: pd.DataFrame, n: int = 100, **kwargs) -> None:
-    safe = make_arrow_safe_preview(df, n=n)
-    st.dataframe(safe, **kwargs)
 
-# ---- Misc analytics helpers (kept; some are used in Hierarchy) ----
-@st.cache_data(show_spinner=False)
-def infer_column_types(df: pd.DataFrame) -> dict[str, list[str]]:
-    numeric_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
-    datetime_cols = [c for c in df.columns if pd.api.types.is_datetime64_any_dtype(df[c])]
-    object_like = [c for c in df.columns if c not in numeric_cols + datetime_cols]
-    categorical_cols: list[str] = []
-    for c in object_like:
-        nunique = df[c].nunique(dropna=True)
-        if nunique <= max(50, int(len(df) * 0.02)):
-            categorical_cols.append(c)
-    return {"numeric": numeric_cols, "categorical": categorical_cols, "datetime": datetime_cols}
+class StatsMixedEffectsModel(BaseEstimator, RegressorMixin):
+    """Wrapper for statsmodels MixedLM"""
+    
+    def __init__(self, group_col='Brand', min_group_size=3):
+        self.group_col = group_col
+        self.min_group_size = min_group_size
+        self._model_result = None
+        self.fixed_coef_ = None
+        self.intercept_ = 0.0
+        self.random_effects_dict_ = {}
+        self.feature_names_ = None
+        self._fallback_model = None
+        self._use_fallback = False
+        
+    def fit(self, X, y, groups):
+        if not isinstance(X, pd.DataFrame):
+            X = pd.DataFrame(X, columns=[f"X{i}" for i in range(X.shape[1])])
+        
+        self.feature_names_ = list(X.columns)
+        
+        groups_series = pd.Series(groups.values if hasattr(groups, 'values') else groups)
+        group_counts = groups_series.value_counts()
+        
+        valid_groups = group_counts[group_counts >= self.min_group_size].index
+        valid_mask = groups_series.isin(valid_groups)
+        
+        n_filtered = len(group_counts) - len(valid_groups)
+        if n_filtered > 0:
+            st.caption(f"Filtered {n_filtered} groups with < {self.min_group_size} observations")
+        
+        if valid_mask.sum() < len(X) * 0.5:
+            self._use_fallback = True
+        
+        try:
+            if not self._use_fallback and len(valid_groups) > 1:
+                X_valid = X[valid_mask]
+                y_valid = y[valid_mask] if hasattr(y, '__getitem__') else y[valid_mask]
+                groups_valid = groups_series[valid_mask]
+                
+                X_with_const = sm.add_constant(X_valid, has_constant='add')
+                
+                mixed_model = sm.MixedLM(
+                    endog=y_valid,
+                    exog=X_with_const,
+                    groups=groups_valid.values,
+                    exog_re=None
+                )
+                
+                try:
+                    self._model_result = mixed_model.fit(method='lbfgs', reml=False)
+                except:
+                    try:
+                        self._model_result = mixed_model.fit(method='bfgs', reml=False)
+                    except:
+                        self._model_result = mixed_model.fit(method='powell', reml=False)
+                
+                params = self._model_result.params
+                self.intercept_ = params['const'] if 'const' in params else 0.0
+                self.fixed_coef_ = params.drop('const').values
+                
+                self.random_effects_dict_ = {
+                    group: effects.values[0]
+                    for group, effects in self._model_result.random_effects.items()
+                }
+                
+                for group in group_counts.index:
+                    if group not in self.random_effects_dict_:
+                        self.random_effects_dict_[group] = 0.0
+                        
+            else:
+                self._use_fallback = True
+                
+        except Exception as e:
+            st.warning(f"Mixed effects failed: {str(e)}. Using fallback.")
+            self._use_fallback = True
+        
+        if self._use_fallback:
+            from sklearn.linear_model import LinearRegression
+            self._fallback_model = LinearRegression()
+            self._fallback_model.fit(X, y)
+            self.intercept_ = self._fallback_model.intercept_
+            self.fixed_coef_ = self._fallback_model.coef_
+            self.random_effects_dict_ = {group: 0.0 for group in group_counts.index}
+        
+        self.coef_ = self.fixed_coef_
+        
+        return self
+        
+    def predict(self, X, groups=None):
+        if not isinstance(X, pd.DataFrame):
+            X = pd.DataFrame(X, columns=self.feature_names_)
+        
+        if self._use_fallback and self._fallback_model is not None:
+            return self._fallback_model.predict(X)
+        else:
+            X_with_const = sm.add_constant(X, has_constant='add')
+            y_pred_fixed = X_with_const.values @ np.concatenate([[self.intercept_], self.fixed_coef_])
+            
+            if groups is None:
+                return y_pred_fixed
+            else:
+                y_pred = y_pred_fixed.copy()
+                groups_array = groups.values if hasattr(groups, 'values') else groups
+                
+                for i, group in enumerate(groups_array):
+                    if group in self.random_effects_dict_:
+                        y_pred[i] += self.random_effects_dict_[group]
+                        
+                return y_pred
 
-def get_sampled_df(df: pd.DataFrame, max_rows: int | None) -> pd.DataFrame:
-    if max_rows is None or max_rows <= 0 or len(df) <= max_rows:
-        return df
-    return df.sample(n=max_rows, random_state=42)
+# ═══════════════════════════════════════════════════════════════════════════
+# RECURSIVE LEAST SQUARES MODEL
+# ═══════════════════════════════════════════════════════════════════════════
 
-@st.cache_data(show_spinner=False)
-def compute_numeric_corr(df_num: pd.DataFrame, method: str = "pearson") -> pd.DataFrame:
-    if df_num.empty or df_num.shape[1] < 2:
-        return pd.DataFrame()
-    return df_num.corr(method=method)
-
-
-def _cramers_v_from_table(table: np.ndarray) -> float:
-    if table.size == 0:
-        return np.nan
-    n = table.sum()
-    if n == 0:
-        return np.nan
-    row_sums = table.sum(axis=1)[:, None]
-    col_sums = table.sum(axis=0)[None, :]
-    expected = row_sums * col_sums / max(n, 1)
-    with np.errstate(divide='ignore', invalid='ignore'):
-        chi2 = np.nansum((table - expected) ** 2 / np.where(expected == 0, np.nan, expected))
-    k = table.shape[1]
-    r = table.shape[0]
-    denom = n * (min(k - 1, r - 1))
-    if denom <= 0:
-        return np.nan
-    return float(np.sqrt(max(chi2, 0.0) / denom))
-
-@st.cache_data(show_spinner=False)
-def compute_cramers_v_matrix(df_cat: pd.DataFrame, max_unique: int = 50) -> pd.DataFrame:
-    cols = [c for c in df_cat.columns if df_cat[c].nunique(dropna=True) <= max_unique]
-    if len(cols) < 2:
-        return pd.DataFrame()
-    result = pd.DataFrame(index=cols, columns=cols, dtype=float)
-    for i, a in enumerate(cols):
-        for j, b in enumerate(cols):
-            if j < i:
-                continue
+class RecursiveLeastSquares(BaseEstimator, RegressorMixin):
+    """
+    Recursive Least Squares with forgetting factor and constraints
+    
+    Parameters:
+    -----------
+    forgetting_factor : float, default=0.99
+        Forgetting factor (0 < λ ≤ 1). Lower values give more weight to recent data.
+        Common values: 0.95-0.99
+    initial_P : float, default=1.0
+        Initial covariance matrix scaling (P = initial_P * I)
+        For standardized features, 1-100 is appropriate
+    non_negative_features : list, default=None
+        Feature names that must have non-negative (≥0) coefficients
+    non_positive_features : list, default=None
+        Feature names that must have non-positive (≤0) coefficients
+    """
+    def __init__(self, forgetting_factor=0.99, initial_P=1.0,
+                 non_negative_features=None, non_positive_features=None):
+        self.forgetting_factor = forgetting_factor
+        self.initial_P = initial_P
+        self.non_negative_features = non_negative_features or []
+        self.non_positive_features = non_positive_features or []
+        
+        self.beta = None
+        self.coef_ = None
+        self.intercept_ = 0.0
+        self.P = None
+        self.n_features_ = None
+        self.beta_history_ = []
+        self.prediction_history_ = []
+        self.feature_names_ = None
+        self._non_negative_indices = []
+        self._non_positive_indices = []
+        
+    def fit(self, X, y, feature_names=None, initial_beta=None, initial_intercept=None):
+        """
+        Initialize RLS with coefficients from another model (preferred) or OLS fallback
+        """
+        # Store feature names for constraint mapping
+        if isinstance(X, pd.DataFrame):
+            self.feature_names_ = X.columns.tolist()
+            X = X.values
+        elif feature_names is not None:
+            self.feature_names_ = feature_names
+        
+        if not isinstance(X, np.ndarray):
+            X = np.array(X)
+        if not isinstance(y, np.ndarray):
+            y = np.array(y)
+        
+        # Add intercept column
+        X_with_intercept = np.column_stack([np.ones(len(X)), X])
+        self.n_features_ = X.shape[1]
+        
+        # Map constraint feature names to indices (1-indexed because of intercept)
+        if self.feature_names_:
+            self._non_negative_indices = [
+                i + 1 for i, name in enumerate(self.feature_names_) 
+                if name in self.non_negative_features
+            ]
+            self._non_positive_indices = [
+                i + 1 for i, name in enumerate(self.feature_names_) 
+                if name in self.non_positive_features
+            ]
+        
+        # ═══════════════════════════════════════════════════════════════
+        # FIXED: Use provided betas WITHOUT running RLS updates
+        # ═══════════════════════════════════════════════════════════════
+        if initial_beta is not None and initial_intercept is not None:
+            # Use the trained model's coefficients directly
+            self.beta = np.concatenate([[initial_intercept], initial_beta])
+            
+            # DO NOT run RLS updates on training data!
+            # The betas are already optimized from the trained model
+            
+        else:
+            # Fallback: Initialize with OLS on first few samples
+            init_size = min(10, len(X))
+            X_init = X_with_intercept[:init_size]
+            y_init = y[:init_size]
+            
             try:
-                tab = pd.crosstab(df_cat[a], df_cat[b]).to_numpy()
-                v = _cramers_v_from_table(tab)
-            except Exception:
-                v = np.nan
-            result.loc[a, b] = v
-            result.loc[b, a] = v
-    np.fill_diagonal(result.values, 1.0)
+                XtX = X_init.T @ X_init
+                Xty = X_init.T @ y_init
+                beta_init = np.linalg.solve(XtX, Xty)
+            except:
+                beta_init = np.linalg.pinv(X_init) @ y_init
+            
+            self.beta = beta_init.copy()
+            
+            # Only run RLS updates if we used OLS initialization
+            for i in range(init_size, len(X)):
+                x_t = X_with_intercept[i]
+                y_t = y[i]
+                self._update(x_t, y_t)
+        
+        # Apply constraints to initial beta
+        self._apply_constraints()
+        
+        self.intercept_ = self.beta[0]
+        self.coef_ = self.beta[1:]
+        
+        # ═══════════════════════════════════════════════════════════════
+        # Initialize covariance matrix P
+        # ═══════════════════════════════════════════════════════════════
+        try:
+            XtX = X_with_intercept.T @ X_with_intercept
+            n_params = XtX.shape[0]
+            
+            # CRITICAL FIX: For pre-trained models, use smaller P for stability
+            if initial_beta is not None and initial_intercept is not None:
+                # Pre-trained model: Use inverse of data covariance for more stable updates
+                regularization = 0.01 * np.eye(n_params)
+                self.P = np.linalg.inv(XtX / len(X) + regularization)
+            else:
+                # Fresh start: Use larger P for faster learning
+                self.P = self.initial_P * np.eye(n_params)
+            
+        except np.linalg.LinAlgError:
+            self.P = self.initial_P * np.eye(len(self.beta))
+        
+        # Store initial state
+        self.beta_history_ = [self.beta.copy()]
+        
+        return self
+
+    
+    def _apply_constraints(self):
+        """Apply non-negative and non-positive constraints to beta coefficients"""
+        for idx in self._non_negative_indices:
+            if self.beta[idx] < 0:
+                self.beta[idx] = 0.0
+        
+        for idx in self._non_positive_indices:
+            if self.beta[idx] > 0:
+                self.beta[idx] = 0.0
+    
+    def _update(self, x_t, y_t):
+        """
+        Internal method to update beta with a single observation
+        
+        Parameters:
+        -----------
+        x_t : np.ndarray
+            Single observation with intercept [1, x1, x2, ...]
+        y_t : float
+            Target value for this observation
+        """
+        x_t_col = x_t.reshape(-1, 1)
+        
+        # Prediction error
+        y_pred = x_t @ self.beta
+        error = y_t - y_pred
+        
+        # RLS update: K = P @ x / (λ + x.T @ P @ x)
+        P_x = self.P @ x_t_col
+        denominator = self.forgetting_factor + (x_t_col.T @ self.P @ x_t_col)[0, 0]
+        denominator = max(denominator, 1e-8)  # Numerical stability
+        K = P_x / denominator
+        
+        # Update beta: beta = beta + K * error
+        beta_update = (K * error).flatten()
+        
+        # Clip extremely large updates
+        max_update = 10.0
+        if np.abs(beta_update).max() > max_update:
+            beta_update = np.clip(beta_update, -max_update, max_update)
+        
+        self.beta += beta_update
+        
+        # Clip beta values to prevent explosion
+        max_beta = 1000.0
+        if np.abs(self.beta).max() > max_beta:
+            self.beta = np.clip(self.beta, -max_beta, max_beta)
+        
+        # Apply constraints
+        self._apply_constraints()
+        
+        # Update P matrix: P_new = (1/λ) * (P - K @ x.T @ P)
+        P_new = (1.0 / self.forgetting_factor) * self.P
+        P_new = P_new - K @ (x_t_col.T @ P_new)
+        
+        # Numerical stability
+        max_P_value = 100.0
+        P_new = np.clip(P_new, -max_P_value, max_P_value)
+        P_new = P_new + 0.01 * np.eye(len(P_new))
+        self.P = P_new
+        
+        # Track history
+        self.beta_history_.append(self.beta.copy())
+        self.prediction_history_.append(y_pred)
+        
+        # Update intercept and coefficients
+        self.intercept_ = self.beta[0]
+        self.coef_ = self.beta[1:]
+    
+    def update(self, X, y):
+        """
+        Update RLS coefficients with new observation(s) without returning prediction
+        """
+        if not isinstance(X, np.ndarray):
+            X = np.array(X)
+        if not isinstance(y, np.ndarray):
+            y = np.array(y)
+        
+        for i in range(len(X)):
+            x_t = np.concatenate([[1], X[i]])
+            y_t = y[i]
+            self._update(x_t, y_t)
+    
+    def predict(self, X):
+        """Predict using current beta estimates"""
+        if not isinstance(X, np.ndarray):
+            X = np.array(X)
+        
+        X_with_intercept = np.column_stack([np.ones(len(X)), X])
+        return X_with_intercept @ self.beta
+    
+    def update_and_predict(self, X, y):
+        """
+        Update model with new data and return predictions
+        Returns predictions BEFORE updating (true out-of-sample)
+        """
+        if not isinstance(X, np.ndarray):
+            X = np.array(X)
+        if not isinstance(y, np.ndarray):
+            y = np.array(y)
+        
+        predictions = []
+        
+        for i in range(len(X)):
+            x_t = np.concatenate([[1], X[i]])
+            y_pred = x_t @ self.beta
+            predictions.append(y_pred)
+            
+            # Update with actual observation
+            self._update(x_t, y[i])
+        
+        return np.array(predictions)
+    
+    def get_beta_history(self):
+        """Return history of beta estimates"""
+        return np.array(self.beta_history_)
+
+
+def apply_rls_on_holdout(trained_model, X_train, y_train, 
+                         X_warmup, y_warmup,
+                         X_holdout, y_holdout, 
+                         feature_names, forgetting_factor,
+                         nonnegative_features=None, nonpositive_features=None,
+                         initial_beta=None, initial_intercept=None):
+    """
+    Apply RLS with warmup period before holdout testing
+    
+    Parameters:
+    -----------
+    trained_model : model object or None
+        If provided, extract initial betas from this model
+    initial_beta : array-like, optional
+        Initial beta coefficients (overrides trained_model if provided)
+    initial_intercept : float, optional
+        Initial intercept (overrides trained_model if provided)
+    """
+    # Create RLS model
+    rls_model = RecursiveLeastSquares(
+        forgetting_factor=forgetting_factor,
+        initial_P=1.0,  # REDUCED for stability with pre-trained models
+        non_negative_features=nonnegative_features,
+        non_positive_features=nonpositive_features
+    )
+    
+    # Get initial beta: use provided params, or extract from trained model
+    if initial_beta is None or initial_intercept is None:
+        if trained_model is not None:
+            if hasattr(trained_model, 'coef_'):
+                initial_beta = trained_model.coef_
+                initial_intercept = trained_model.intercept_ if hasattr(trained_model, 'intercept_') else 0.0
+            elif hasattr(trained_model, 'W'):
+                initial_beta = trained_model.W
+                initial_intercept = trained_model.b if hasattr(trained_model, 'b') else 0.0
+    
+    # Initialize RLS with betas from week 44 model (or ensemble betas)
+    rls_model.fit(X_train, y_train, feature_names=feature_names,
+                  initial_beta=initial_beta, initial_intercept=initial_intercept)
+    
+    # NOTE: P matrix is already initialized in fit() method, no need to reinitialize
+    
+    # Store initial state (after training on 1-44, before warmup)
+    initial_beta_state = rls_model.beta.copy()
+    
+    # ═══════════════════════════════════════════════════════════════
+    # WARMUP PHASE: Predict AND update on weeks 45-48
+    # ═══════════════════════════════════════════════════════════════
+    warmup_predictions = []
+    warmup_beta_snapshots = [initial_beta_state.copy()]  # Start with week 44 betas
+    
+    if len(X_warmup) > 0:
+        for i in range(len(X_warmup)):
+            # Predict BEFORE update
+            y_pred_warmup = rls_model.predict(X_warmup[i:i+1])[0]
+            warmup_predictions.append(y_pred_warmup)
+            
+            # Update with actual
+            rls_model.update(X_warmup[i:i+1], y_warmup[i:i+1])
+            
+            # Store beta after this warmup update
+            warmup_beta_snapshots.append(rls_model.beta.copy())
+    
+    # Store warmed-up state (after week 48, before testing on 49-52)
+    warmed_beta_state = rls_model.beta.copy()
+    
+    # ═══════════════════════════════════════════════════════════════
+    # HOLDOUT PHASE: Predict with FROZEN betas (NO updates) on weeks 49-52
+    # ═══════════════════════════════════════════════════════════════
+    holdout_predictions = []
+    holdout_beta_snapshots = [warmed_beta_state.copy()]  # Start with warmed-up betas
+    
+    # CRITICAL VERIFICATION: Store beta before holdout to ensure no changes
+    beta_before_holdout = rls_model.beta.copy()
+    
+    for i in range(len(X_holdout)):
+        # Predict with frozen betas
+        y_pred = rls_model.predict(X_holdout[i:i+1])[0]
+        holdout_predictions.append(y_pred)
+        
+        # NO UPDATE during holdout - betas must remain frozen
+        # This is critical for proper out-of-sample testing
+        
+        # Verify betas haven't changed (safety check)
+        if not np.allclose(rls_model.beta, beta_before_holdout):
+            raise ValueError("CRITICAL ERROR: Beta coefficients changed during holdout period!")
+        
+        # Store beta (same as warmed state, verified no change)
+        holdout_beta_snapshots.append(rls_model.beta.copy())
+    
+    # Calculate metrics on holdout period only
+    actuals_holdout = y_holdout
+    preds_holdout = np.array(holdout_predictions)
+    
+    # Calculate metrics on warmup period (for tracking)
+    actuals_warmup = y_warmup if len(warmup_predictions) > 0 else np.array([])
+    preds_warmup = np.array(warmup_predictions) if len(warmup_predictions) > 0 else np.array([])
+    
+    return {
+        # Holdout predictions and metrics
+        'predictions': preds_holdout,
+        'R2_Holdout': r2_score(actuals_holdout, preds_holdout),
+        'MAE_Holdout': mean_absolute_error(actuals_holdout, preds_holdout),
+        'MSE_Holdout': mean_squared_error(actuals_holdout, preds_holdout),
+        'RMSE_Holdout': np.sqrt(mean_squared_error(actuals_holdout, preds_holdout)),
+        'MAPE_Holdout': safe_mape(actuals_holdout, preds_holdout),
+        
+        # Warmup predictions (NEW)
+        'warmup_predictions': preds_warmup,
+        'warmup_actuals': actuals_warmup,
+        
+        # Beta history (ENHANCED)
+        'beta_history': {
+            'feature_names': ['Intercept'] + list(feature_names),
+            'warmup_beta_snapshots': warmup_beta_snapshots,  # Betas during warmup
+            'holdout_beta_snapshots': holdout_beta_snapshots,  # Betas during holdout
+            'n_warmup': len(X_warmup),
+            'n_holdout': len(X_holdout)
+        },
+        
+        'final_betas': rls_model.coef_,
+        'final_intercept': rls_model.intercept_
+    }
+
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# HELPER FUNCTIONS
+# ═══════════════════════════════════════════════════════════════════════════
+
+def validate_rls_data_splits(train_df, warmup_df, holdout_df, total_weeks=52):
+    """
+    Validate that RLS data splits are correct and non-overlapping
+    """
+    n_train = len(train_df)
+    n_warmup = len(warmup_df) 
+    n_holdout = len(holdout_df)
+    n_total = n_train + n_warmup + n_holdout
+    
+    # Check for expected weeks
+    if total_weeks is not None and n_total != total_weeks:
+        print(f"WARNING: Expected {total_weeks} weeks, got {n_total}")
+    
+    # Check for non-overlapping indices
+    if not train_df.index.intersection(warmup_df.index).empty:
+        raise ValueError("Data leakage: Training and warmup sets overlap!")
+    if not train_df.index.intersection(holdout_df.index).empty:
+        raise ValueError("Data leakage: Training and holdout sets overlap!")
+    if not warmup_df.index.intersection(holdout_df.index).empty:
+        raise ValueError("Data leakage: Warmup and holdout sets overlap!")
+    
+    return True
+
+def safe_mape(y_true, y_pred):
+    """
+    Calculate MAPE safely with automatic protection against small values
+    - Excludes values where |y_true| < 1.0 (handles count data with 0s)
+    - Caps individual errors at 500% to prevent outlier explosion
+    """
+    y_true = np.array(y_true, dtype=float)
+    y_pred = np.array(y_pred, dtype=float)
+    
+    # Only include values where |y_true| >= 1.0
+    valid_mask = (np.abs(y_true) >= 1.0)
+    
+    if not valid_mask.any():
+        return float("nan")
+    
+    y_true_valid = y_true[valid_mask]
+    y_pred_valid = y_pred[valid_mask]
+    
+    # Calculate percentage errors
+    percent_errors = np.abs((y_true_valid - y_pred_valid) / y_true_valid) * 100
+    
+    # Cap extreme percentage errors at 500% to prevent small values from dominating
+    percent_errors = np.minimum(percent_errors, 500.0)
+    
+    return np.mean(percent_errors)
+
+# Default grid of RLS forgetting factors for automatic tuning
+# FIXED: Use higher values (less forgetting) for more stable updates
+DEFAULT_RLS_LAMBDA_GRID = [0.95, 0.96, 0.97, 0.98, 0.99, 0.995, 0.999, 1.0]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ENSEMBLE FUNCTIONS
+# ═══════════════════════════════════════════════════════════════════════════
+
+def build_weighted_ensemble_model(models_df, weight_metric='MAPE Test', grouping_keys=None):
+    """
+    Build a weighted ensemble model by averaging coefficients across models.
+    Uses MAPE-based exponential weighting (lower MAPE = higher weight).
+    
+    Parameters:
+    -----------
+    models_df : pd.DataFrame
+        DataFrame with model results (must have Fold='Avg' rows)
+    weight_metric : str
+        Column name to use for weighting (default: 'MAPE Test')
+    grouping_keys : list
+        Keys that define unique combinations
+        
+    Returns:
+    --------
+    dict with ensemble coefficients and metadata
+    """
+    if weight_metric not in models_df.columns:
+        st.warning(f"Metric '{weight_metric}' not found. Using equal weights.")
+        weights = np.ones(len(models_df))
+    else:
+        metric_values = pd.to_numeric(models_df[weight_metric], errors='coerce')
+        
+        if metric_values.isna().all():
+            weights = np.ones(len(models_df))
+        else:
+            # Exponential weighting: lower metric = higher weight
+            best_value = metric_values.min()
+            weights = np.exp(-0.5 * (metric_values - best_value))
+            weights = np.nan_to_num(weights, nan=0.0)
+    
+    # Normalize weights
+    weight_sum = weights.sum()
+    if weight_sum == 0 or np.isnan(weight_sum):
+        weights = np.ones(len(models_df))
+        weight_sum = weights.sum()
+    
+    weights = weights / weight_sum
+    
+    # Extract beta columns
+    beta_cols = [c for c in models_df.columns if c.startswith('Beta_')]
+    
+    # Weighted average of betas
+    ensemble_betas = {}
+    for beta_col in beta_cols:
+        if beta_col in models_df.columns:
+            values = pd.to_numeric(models_df[beta_col], errors='coerce').fillna(0)
+            ensemble_betas[beta_col] = np.average(values, weights=weights)
+    
+    # Weighted average of intercept
+    ensemble_intercept = 0.0
+    if 'B0 (Original)' in models_df.columns:
+        b0_values = pd.to_numeric(models_df['B0 (Original)'], errors='coerce').fillna(0)
+        ensemble_intercept = np.average(b0_values, weights=weights)
+    
+    # Metadata
+    result = {
+        'ensemble_betas': ensemble_betas,
+        'ensemble_intercept': ensemble_intercept,
+        'num_models': len(models_df),
+        'weights': weights,
+        'model_names': models_df['Model'].tolist() if 'Model' in models_df.columns else [],
+        'best_model_idx': int(np.argmax(weights)),
+        'weight_concentration': float(weights.max())
+    }
+    
+    # Add weighted metrics
+    for metric_col in ['R2 Test', 'R2 Train', 'MAPE Test', 'MAPE Train', 'MAE Test', 'MAE Train']:
+        if metric_col in models_df.columns:
+            metric_values = pd.to_numeric(models_df[metric_col], errors='coerce').fillna(0)
+            result[f'ensemble_{metric_col.lower().replace(" ", "_")}'] = np.average(metric_values, weights=weights)
+    
     return result
 
-@st.cache_data(show_spinner=False)
-def missing_by_column(df: pd.DataFrame) -> pd.DataFrame:
-    miss = df.isna().mean().sort_values(ascending=False)
-    return miss.rename("pct_missing").rename_axis("column").reset_index()
 
-# -------- Persistence (SQLite) --------
-DB_PATH = os.path.join(os.path.dirname(__file__), "data_cache.db")
-
-def _connect_db():
-    return sqlite3.connect(DB_PATH)
-
-def _sanitize_table_name(name: str) -> str:
-    base = re.sub(r"[^0-9A-Za-z_]+", "_", name.strip().lower()).strip("_")
-    if not base:
-        base = "dataset"
-    if not base.startswith("ds_"):
-        base = f"ds_{base}"
-    return base
-
-@st.cache_data(show_spinner=False)
-def list_saved_tables() -> list[str]:
-    try:
-        with _connect_db() as conn:
-            cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;")
-            return [r[0] for r in cur.fetchall()]
-    except Exception:
-        return []
-
-def save_df_to_db(df: pd.DataFrame, name: str, replace: bool = True) -> str:
-    tbl = _sanitize_table_name(name)
-    with _connect_db() as conn:
-        df.to_sql(tbl, conn, if_exists=("replace" if replace else "fail"), index=False)
-    return tbl
-
-def write_df_sqlite(df: pd.DataFrame, conn: sqlite3.Connection, table: str, overwrite: bool, chunk_size: int | None) -> None:
-    """Robust writer: avoids 'too many SQL variables' and handles huge ints by casting to TEXT."""
-    SQLITE_LIMIT = 999
-    ncols = max(1, len(df.columns))
-    max_rows = max(1, (SQLITE_LIMIT // ncols) - 1)
-    effective_chunk = max_rows if (chunk_size is None or chunk_size <= 0) else min(chunk_size, max_rows)
-
-    def _prepare_df_for_sqlite(frame: pd.DataFrame) -> pd.DataFrame:
-        prepared = frame.copy()
-        for col in prepared.columns:
-            ser = prepared[col]
-            nums = pd.to_numeric(ser, errors='coerce')
-            max_val = nums.max(skipna=True)
-            min_val = nums.min(skipna=True)
-            if (pd.notna(max_val) and max_val > INT64_MAX) or (pd.notna(min_val) and min_val < INT64_MIN):
-                prepared[col] = ser.astype(str)
+def create_ensemble_model_from_results(results_df, grouping_keys, feature_names, 
+                                       weight_metric='MAPE Test',
+                                       filter_r2_min=None, filter_mape_max=None, filter_mae_max=None,
+                                       filter_positive_features=None, filter_negative_features=None):
+    """
+    Create ensemble models for each unique combination from CV results.
+    
+    Parameters:
+    -----------
+    results_df : pd.DataFrame
+        Results from cross-validation (must include Fold='Avg' rows)
+    grouping_keys : list
+        Keys that define unique combinations
+    feature_names : list
+        List of feature/predictor names
+    weight_metric : str
+        Metric to use for weighting ('MAPE Test', 'MAE Test', etc.)
+    filter_r2_min : float, optional
+        Minimum R² Test threshold to include a model
+    filter_mape_max : float, optional
+        Maximum MAPE Test threshold to include a model
+    filter_mae_max : float, optional
+        Maximum MAE Test threshold to include a model
+    filter_positive_features : list, optional
+        Features that must have positive coefficients (≥0) in models to be included
+    filter_negative_features : list, optional
+        Features that must have negative coefficients (≤0) in models to be included
+        
+    Returns:
+    --------
+    dict: {combination_key: ensemble_model_dict}
+    """
+    # Filter to only averaged results
+    avg_results = results_df[results_df['Fold'] == 'Avg'].copy()
+    
+    if avg_results.empty:
+        return {}
+    
+    # Apply optional filters
+    if filter_r2_min is not None and 'R2 Test' in avg_results.columns:
+        r2_values = pd.to_numeric(avg_results['R2 Test'], errors='coerce')
+        avg_results = avg_results[r2_values >= filter_r2_min]
+    
+    if filter_mape_max is not None and 'MAPE Test' in avg_results.columns:
+        mape_values = pd.to_numeric(avg_results['MAPE Test'], errors='coerce')
+        avg_results = avg_results[mape_values <= filter_mape_max]
+    
+    if filter_mae_max is not None and 'MAE Test' in avg_results.columns:
+        mae_values = pd.to_numeric(avg_results['MAE Test'], errors='coerce')
+        avg_results = avg_results[mae_values <= filter_mae_max]
+    
+    # Apply sign-based filtering
+    if filter_positive_features or filter_negative_features:
+        initial_count = len(avg_results)
+        mask = pd.Series([True] * len(avg_results), index=avg_results.index)
+        
+        # Check positive constraints
+        if filter_positive_features:
+            for feature in filter_positive_features:
+                beta_col = f"Beta_{feature}"
+                if beta_col in avg_results.columns:
+                    beta_values = pd.to_numeric(avg_results[beta_col], errors='coerce')
+                    # Keep only models where this coefficient is >= 0 (with small tolerance for numerical errors)
+                    mask &= (beta_values >= -1e-6)
+        
+        # Check negative constraints
+        if filter_negative_features:
+            for feature in filter_negative_features:
+                beta_col = f"Beta_{feature}"
+                if beta_col in avg_results.columns:
+                    beta_values = pd.to_numeric(avg_results[beta_col], errors='coerce')
+                    # Keep only models where this coefficient is <= 0 (with small tolerance for numerical errors)
+                    mask &= (beta_values <= 1e-6)
+        
+        avg_results = avg_results[mask]
+        filtered_count = initial_count - len(avg_results)
+        
+        if filtered_count > 0:
+            st.info(f"🔍 Sign filtering: Excluded {filtered_count} model(s) with incorrect coefficient signs")
+    
+    if avg_results.empty:
+        st.warning("⚠️ No models passed the ensemble filters. Relax filter thresholds.")
+        return {}
+    
+    # Build ensemble for each unique combination
+    ensembles = {}
+    
+    if not grouping_keys:
+        # Single group case
+        ensemble = build_weighted_ensemble_model(avg_results, weight_metric, grouping_keys)
+        ensembles['ALL'] = ensemble
+    else:
+        # Group by combination keys
+        for combo_vals, group_df in avg_results.groupby(grouping_keys, dropna=False):
+            if len(group_df) == 0:
                 continue
-            if pd.api.types.is_integer_dtype(ser):
-                try:
-                    if ser.max() > INT64_MAX or ser.min() < INT64_MIN:
-                        prepared[col] = ser.astype(str)
-                except Exception:
-                    prepared[col] = ser.astype(str)
-        return prepared
-
-    df_sql = _prepare_df_for_sqlite(df)
-    df_sql.to_sql(
-        table,
-        conn,
-        if_exists=("replace" if overwrite else "fail"),
-        index=False,
-        chunksize=effective_chunk,
-        method="multi",
-    )
-
-# -------- Sidebar: Upload --------
-with st.sidebar:
-    st.markdown('<div class="section-header" style="background: linear-gradient(135deg, #FFBD59 0%, #FFCF87 100%); color: #333333;">📁 **Data Upload & Management**</div>', unsafe_allow_html=True)
+            
+            combo_key = " | ".join([f"{k}={v}" for k, v in zip(grouping_keys, combo_vals)]) if isinstance(combo_vals, tuple) else f"{grouping_keys[0]}={combo_vals}"
+            ensemble = build_weighted_ensemble_model(group_df, weight_metric, grouping_keys)
+            ensembles[combo_key] = ensemble
     
-    # Primary upload
-    st.markdown("**Primary Dataset**")
-    file = st.file_uploader("Upload CSV or Excel file", type=["csv", "xlsx", "xls"], help="Upload your main dataset for analysis")
+    return ensembles
 
-    filetype = None
-    sheet_name = None
 
-    if file is not None:
-        name = file.name.lower()
-        if name.endswith(".csv"):
-            filetype = "csv"
-        elif name.endswith(".xlsx") or name.endswith(".xls"):
-            filetype = "xlsx"
-
-        if filetype == "xlsx":
-            try:
-                xls = pd.ExcelFile(file)
-                sheets = xls.sheet_names
-                sheet_name = st.selectbox("Sheet", options=list(range(len(sheets))), format_func=lambda i: sheets[i])
-                file.seek(0)
-            except Exception as e:
-                st.warning(f"Couldn't read sheets: {e}")
-                sheet_name = None
-
-    st.markdown("---")
-    st.markdown("**💾 Database Management**")
-    # Default OFF so uploads don't auto-save (prevents SQLite overflow during preview)
-    st.checkbox("Auto-save uploads to DB", value=False, key="auto_save_uploads",
-                help="Automatically save uploaded files to local database for quick reloads")
+def run_model_pipeline(
+    df,
+    grouping_keys,
+    X_columns,
+    target_col,
+    k_folds,
+    std_cols,
+    models_dict,
+    use_stacked=False,
+    stacking_keys=None,
+    filter_keys_for_stacking=None,
+    log_transform_y=False,
+    min_y_share_pct=1.0,
+    # RLS parameters:
+    enable_rls=False,
+    holdout_weeks=4,
+    warmup_weeks=4,
+    positive_constraints=None,
+    negative_constraints=None,
+    rls_lambda_candidates=None,
+    # Ensemble parameters:
+    enable_ensemble=False,
+    ensemble_weight_metric='MAPE Test',
+    ensemble_filter_r2_min=None,
+    ensemble_filter_mape_max=None,
+    ensemble_filter_mae_max=None,
+    ensemble_filter_positive_features=None,
+    ensemble_filter_negative_features=None
+):
+    """
+    Run modeling pipeline
+    Returns aggregated results (one row per group-model) and predictions
+    """
+    rows = []
+    preds_records = []
+    optimized_lambda_records = []
     
-    st.markdown("**📂 Load Saved Dataset**")
-    saved_tables = list_saved_tables()
-    selected_table = st.selectbox("Select saved dataset", options=[""] + saved_tables, index=0, help="Choose from previously saved datasets")
+    # Separate stacked and non-stacked models
+    stacked_models = {k: v for k, v in models_dict.items() if isinstance(v, StackedInteractionModel)}
+    regular_models = {k: v for k, v in models_dict.items() if not isinstance(v, StackedInteractionModel)}
     
-    cols_load_del = st.columns(2)
-    with cols_load_del[0]:
-        load_from_db = st.button("🔄 Load", disabled=(selected_table == ""), use_container_width=True)
-    with cols_load_del[1]:
-        if st.button("🗑️ Delete", disabled=(selected_table == ""), use_container_width=True):
-            try:
-                delete_tbl = selected_table
-                with _connect_db() as conn:
-                    conn.execute(f"DROP TABLE IF EXISTS '{delete_tbl}'")
-                    conn.commit()
-                if st.session_state.get("active_table") == delete_tbl:
-                    st.session_state["active_table"] = ""
-                st.success(f"✅ Deleted '{delete_tbl}'")
-                st.cache_data.clear()
-                st.rerun()
-            except Exception as e:
-                st.error(f"❌ Delete failed: {e}")
-
-    if load_from_db and selected_table:
-        st.session_state["active_table"] = selected_table
-        st.success(f"✅ Loaded '{selected_table}'")
-    active_table = st.session_state.get("active_table", "")
-    if active_table:
-        st.markdown(f"**Active:** `{active_table}`")
-
-    # ---- Secondary dataset ----
-    st.markdown("---")
-    st.markdown('<div class="section-header" style="background: linear-gradient(135deg, #458EE2 0%, #5A9EFF 100%);">🔄 **Secondary Dataset**</div>', unsafe_allow_html=True)
-    sec_file = st.file_uploader("Upload secondary file", type=["csv", "xlsx", "xls"], key="sec_uploader", help="Upload a second dataset for merging")
-    sec_filetype = None
-    sec_sheet_name = None
-    if sec_file is not None:
-        sname = sec_file.name.lower()
-        if sname.endswith(".csv"):
-            sec_filetype = "csv"
-        elif sname.endswith(".xlsx") or sname.endswith(".xls"):
-            sec_filetype = "xlsx"
-        if sec_filetype == "xlsx":
-            try:
-                sec_xls = pd.ExcelFile(sec_file)
-                sec_sheets = sec_xls.sheet_names
-                sec_sheet_name = st.selectbox("Secondary sheet", options=list(range(len(sec_sheets))), format_func=lambda i: sec_sheets[i], key="sec_sheet")
-                sec_file.seek(0)
-            except Exception as e:
-                st.warning(f"Couldn't read secondary sheets: {e}")
-                sec_sheet_name = None
-
-    saved_tables2 = list_saved_tables()
-    selected_table2 = st.selectbox("Saved datasets (secondary)", options=[""] + saved_tables2, index=0, key="sec_saved_sel")
-    cols_sec = st.columns(2)
-    with cols_sec[0]:
-        load_sec = st.button("Load secondary", disabled=(selected_table2 == ""), key="btn_load_sec")
-    with cols_sec[1]:
-        if st.button("Clear secondary", key="btn_clear_sec"):
-            st.session_state["active_table_secondary"] = ""
-            st.session_state["secondary_df_buffer"] = None
-            st.success("Cleared secondary dataset")
-
-    if load_sec and selected_table2:
-        st.session_state["active_table_secondary"] = selected_table2
-        st.success(f"Loaded secondary '{selected_table2}'")
-
-    # Secondary upload → preview-only unless auto-save is ON
-    if sec_file is not None and sec_filetype is not None:
-        try:
-            sec_df = read_tabular_file(sec_file, filetype=sec_filetype, sheet_name=sec_sheet_name)
-            st.session_state["secondary_df_buffer"] = sec_df
-
-            if st.session_state.get("auto_save_uploads", False):
-                sec_base = os.path.splitext(sec_file.name)[0]
-                sec_save_default = f"{sec_base}_sheet{sec_sheet_name}_sec" if isinstance(sec_sheet_name, int) else f"{sec_base}_sec"
-                sec_tbl = _sanitize_table_name(sec_save_default)
-                with _connect_db() as conn:
-                    write_df_sqlite(sec_df, conn, sec_tbl, overwrite=True, chunk_size=100_000)
-                st.session_state["active_table_secondary"] = sec_tbl
-                st.success(f"Saved secondary to table '{sec_tbl}' in {DB_PATH}")
-                st.cache_data.clear()
+    # For regular models: use ALL grouping_keys
+    if grouping_keys and regular_models:
+        grouped_regular = df.groupby(grouping_keys)
+        group_list_regular = list(grouped_regular)
+    else:
+        group_list_regular = [((None,), df)] if regular_models else []
+    
+    # For stacked models: use ONLY filter_keys_for_stacking
+    if filter_keys_for_stacking and stacked_models:
+        grouped_stacked = df.groupby(filter_keys_for_stacking)
+        group_list_stacked = list(grouped_stacked)
+    else:
+        group_list_stacked = [((None,), df)] if stacked_models else []
+    
+    # ═════════════════════════════════════════════════════════════════════════
+    # FILTER GROUPS BY Y VARIABLE SHARE (min_y_share_pct)
+    # ═════════════════════════════════════════════════════════════════════════
+    total_y = df[target_col].sum()
+    
+    if min_y_share_pct > 0 and total_y > 0:
+        # Filter regular models groups
+        filtered_regular = []
+        skipped_regular = []
+        for gvals, gdf in group_list_regular:
+            group_y_sum = gdf[target_col].sum()
+            group_y_share = (group_y_sum / total_y) * 100
+            if group_y_share >= min_y_share_pct:
+                filtered_regular.append((gvals, gdf))
             else:
-                st.session_state["active_table_secondary"] = ""
-                st.info("Secondary loaded for preview only (not saved to DB).")
-        except Exception as e:
-            st.warning(f"Secondary load failed: {e}")
-
-    active_table_secondary = st.session_state.get("active_table_secondary", "")
-    if active_table_secondary:
-        st.caption(f"Active secondary dataset: {active_table_secondary}")
-
-    # Global options
-    st.markdown("---")
-    st.markdown('<div class="section-header" style="background: linear-gradient(135deg, #41C185 0%, #4CD494 100%);">⚙️ **Global Settings**</div>', unsafe_allow_html=True)
+                gvals_tuple = (gvals,) if not isinstance(gvals, tuple) else gvals
+                group_name = " | ".join([f"{k}={v}" for k, v in zip(grouping_keys, gvals_tuple)]) if grouping_keys else "All"
+                skipped_regular.append(f"{group_name} ({group_y_share:.2f}%)")
+        
+        # Filter stacked models groups
+        filtered_stacked = []
+        skipped_stacked = []
+        for gvals, gdf in group_list_stacked:
+            group_y_sum = gdf[target_col].sum()
+            group_y_share = (group_y_sum / total_y) * 100
+            if group_y_share >= min_y_share_pct:
+                filtered_stacked.append((gvals, gdf))
+            else:
+                gvals_tuple = (gvals,) if not isinstance(gvals, tuple) else gvals
+                group_name = " | ".join([f"{k}={v}" for k, v in zip(filter_keys_for_stacking if filter_keys_for_stacking else [], gvals_tuple)]) if filter_keys_for_stacking else "All"
+                skipped_stacked.append(f"{group_name} ({group_y_share:.2f}%)")
+        
+        # Update group lists
+        group_list_regular = filtered_regular
+        group_list_stacked = filtered_stacked
+        
+        # Show info about filtered groups
+        if skipped_regular:
+            st.info(f"🔍 Filtered {len(skipped_regular)} regular model group(s) with <{min_y_share_pct}% Y share:\n" + 
+                   "\n".join([f"• {name}" for name in skipped_regular[:10]]) +
+                   (f"\n• ... and {len(skipped_regular) - 10} more" if len(skipped_regular) > 10 else ""))
+        
+        if skipped_stacked:
+            st.info(f"🔍 Filtered {len(skipped_stacked)} stacked model group(s) with <{min_y_share_pct}% Y share:\n" + 
+                   "\n".join([f"• {name}" for name in skipped_stacked[:10]]) +
+                   (f"\n• ... and {len(skipped_stacked) - 10} more" if len(skipped_stacked) > 10 else ""))
     
-    st.markdown("**📊 Chart Performance**")
-    chart_sample_limit = st.number_input(
-        "Max rows for charts", min_value=1_000, max_value=200_000, value=50_000, step=5_000,
-        help="Limit chart data for better performance"
-    )
+    n_regular_ops = len(group_list_regular) * len(regular_models) * k_folds
+    n_stacked_ops = len(group_list_stacked) * len(stacked_models) * k_folds
+    total_operations = n_regular_ops + n_stacked_ops
     
-    st.markdown("**🔍 Data Filtering**")
-    filter_query = st.text_input(
-        "Pandas query filter", value="", placeholder="Example: region == 'East' and sales > 1000",
-        help="Advanced filtering using pandas query syntax. Leave blank for no filter."
-    )
-
-# If nothing chosen yet, prompt
-has_primary_any = bool(st.session_state.get("active_table") or file)
-has_secondary_any = bool(st.session_state.get("active_table_secondary") or st.session_state.get("secondary_df_buffer") is not None)
-
-if not (has_primary_any or has_secondary_any):
-    st.markdown('<div class="info-box">', unsafe_allow_html=True)
-    st.markdown("**🚀 Get Started**")
-    st.markdown("Upload a CSV/XLSX file or load a saved dataset from the sidebar to begin your data analysis journey.")
-    st.markdown("</div>", unsafe_allow_html=True)
-    st.stop()
-
-# -------- Read & Basic Info --------
-active_table = st.session_state.get("active_table")
-source_label = ""
-df = None
-
-if active_table:
-    try:
-        df = pd.read_sql_query(f"SELECT * FROM '{active_table}'", _connect_db())
-    except Exception:
-        df = None
-    source_label = f"database table: {active_table}"
-elif file is not None:
-    df = read_tabular_file(file, filetype=filetype, sheet_name=sheet_name)
-    base_name = os.path.splitext(file.name)[0]
-    save_default = f"{base_name}_sheet{sheet_name}" if isinstance(sheet_name, int) else base_name
-    source_label = f"uploaded file: {file.name}"
-    key_uploaded = f"{file.name}|{sheet_name}"
-    if st.session_state.get("auto_save_uploads", False):
-        if st.session_state.get("_saved_key") != key_uploaded:
-            try:
-                tbl = _sanitize_table_name(save_default)
-                with _connect_db() as conn:
-                    write_df_sqlite(df, conn, tbl, overwrite=True, chunk_size=100_000)
-                st.session_state["_saved_key"] = key_uploaded
-                st.success(f"Auto-saved upload to table '{tbl}' in {DB_PATH}")
-                st.cache_data.clear()
-            except Exception as e:
-                st.warning(f"Auto-save failed: {e}")
-else:
-    sec_df_buffer = st.session_state.get("secondary_df_buffer")
-    if active_table_secondary:
-        df = pd.read_sql_query(f"SELECT * FROM '{active_table_secondary}'", _connect_db())
-        source_label = f"database table: {active_table_secondary} (secondary)"
-    elif sec_df_buffer is not None:
-        df = sec_df_buffer
-        source_label = "uploaded secondary (preview-only)"
-
-# Apply saved column order if present
-if "col_order" in st.session_state and isinstance(st.session_state["col_order"], list) and df is not None:
-    saved = [c for c in st.session_state["col_order"] if c in df.columns]
-    remaining = [c for c in df.columns if c not in saved]
-    if saved:
-        df = df[saved + remaining]
-
-# Apply optional filter
-if df is not None and filter_query:
-    try:
-        df = df.query(filter_query, engine="python")
-    except Exception as e:
-        st.warning(f"Filter ignored due to error: {e}")
-
-rows, cols = (0, 0) if df is None else df.shape
-mem = 0.0 if df is None else df.memory_usage(index=True).sum() / (1024 ** 2)
-
-# Top metrics with brand styling
-st.markdown('<div class="section-header" style="background: linear-gradient(135deg, #41C185 0%, #458EE2 100%);">📊 **Dataset Overview**</div>', unsafe_allow_html=True)
-
-m1, m2, m3, m4 = st.columns([1, 1, 1, 1])
-with m1:
-    st.markdown('<div class="metric-box">', unsafe_allow_html=True)
-    st.metric("📈 Rows", f"{rows:,}")
-    st.markdown("</div>", unsafe_allow_html=True)
-with m2:
-    st.markdown('<div class="metric-box">', unsafe_allow_html=True)
-    st.metric("🏷️ Columns", f"{cols:,}")
-    st.markdown("</div>", unsafe_allow_html=True)
-with m3:
-    st.markdown('<div class="metric-box">', unsafe_allow_html=True)
-    st.metric("❌ Null Cells", f"{0 if df is None else int(df.isna().sum().sum()):,}")
-    st.markdown("</div>", unsafe_allow_html=True)
-with m4:
-    st.markdown('<div class="metric-box">', unsafe_allow_html=True)
-    st.metric("💾 Memory", f"{mem:,.2f} MB")
-    st.markdown("</div>", unsafe_allow_html=True)
-
-st.markdown(f"**Source:** `{source_label or '(none)'}`")
-
-# Tabs with brand styling
-st.markdown("---")
-preview_tab, hierarchy_tab, sales_tab = st.tabs([
-    "👀 **Data Preview**", 
-    "🧬 **Hierarchy Analysis**", 
-    "📊 **Sales & Analytics**"
-])
-
-# Dataset switcher - only show when needed
-active_table_secondary = st.session_state.get("active_table_secondary", "")
-if st.session_state.get("active_table") and active_table_secondary:
-    # Only show dataset switcher in preview tab, not everywhere
-    if 'show_dataset_switcher' not in st.session_state:
-        st.session_state.show_dataset_switcher = False
+    # Progress tracking
+    progress_bar = st.progress(0)
+    status_text = st.empty()
     
-    if st.button("🔄 Switch Dataset", key="toggle_dataset_switcher"):
-        st.session_state.show_dataset_switcher = not st.session_state.show_dataset_switcher
+    start_time = time.time()
+    operation_count = 0
     
-    if st.session_state.show_dataset_switcher:
-        st.markdown('<div class="info-box">', unsafe_allow_html=True)
-        st.markdown("**🔄 Dataset Selection**")
-        choice = st.radio(
-            "Active Dataset:",
-            options=["Primary", "Secondary"],
-            index=0,
-            horizontal=True,
-            key="dataset_choice",
-        )
-        if choice == "Secondary":
-            df = pd.read_sql_query(f"SELECT * FROM '{active_table_secondary}'", _connect_db())
-            source_label = f"database table: {active_table_secondary} (secondary)"
-        st.markdown("</div>", unsafe_allow_html=True)
-
-
-# -------- Preview --------
-with preview_tab:
-    st.markdown('<div class="section-header" style="background: linear-gradient(135deg, #41C185 0%, #4CD494 100%);">👀 **Data Preview & Exploration**</div>', unsafe_allow_html=True)
-
-    # Figure out secondary for preview: from DB if present, else memory buffer
-    sec_df = None
-    if active_table_secondary:
-        try:
-            sec_df = pd.read_sql_query(f"SELECT * FROM '{active_table_secondary}'", _connect_db())
-        except Exception as e:
-            st.markdown('<div class="warning-box">', unsafe_allow_html=True)
-            st.warning(f"⚠️ Failed to load secondary dataset from DB: {e}")
-            st.markdown("</div>", unsafe_allow_html=True)
-            sec_df = st.session_state.get("secondary_df_buffer")
-    else:
-        sec_df = st.session_state.get("secondary_df_buffer")
-
-    fdf_primary = None
-    fdf_secondary = None
-
-    # Primary + Secondary side-by-side (each with its own multi-filter)
-    if df is not None and sec_df is not None and not sec_df.empty:
-        colA, colB = st.columns(2)
-
-        with colA:
-            st.markdown("### Primary")
-            fdf_primary = _build_filters_ui(df, key_prefix="pri")
-            st_dataframe_safe(fdf_primary, n=100, use_container_width=True, height=380)
-
-        with colB:
-            st.markdown("### Secondary")
-            fdf_secondary = _build_filters_ui(sec_df, key_prefix="sec")
-            st_dataframe_safe(fdf_secondary, n=100, use_container_width=True, height=380)
-
-    # Only Primary
-    elif df is not None:
-        st.markdown("### Primary")
-        fdf_primary = _build_filters_ui(df, key_prefix="pri")
-        st_dataframe_safe(fdf_primary, n=100, use_container_width=True, height=380)
-        st.info("Load a secondary file to get a second independent filter panel.")
-
-    # Only Secondary
-    elif sec_df is not None and not sec_df.empty:
-        st.markdown("### Secondary (no primary loaded)")
-        fdf_secondary = _build_filters_ui(sec_df, key_prefix="sec")
-        st_dataframe_safe(fdf_secondary, n=100, use_container_width=True, height=380)
-    else:
-        st.info("No data to preview yet.")
-
-    # ---------- Key suggestions (between Preview and Merge) ----------
-    have_both = (
-        isinstance(fdf_primary, pd.DataFrame) and not fdf_primary.empty and
-        isinstance(fdf_secondary, pd.DataFrame) and not fdf_secondary.empty
-    )
-    if have_both:
-        st.markdown("---")
-        with st.expander("🔎 Key suggestions (before Merge)", expanded=True):
-            # persistent store for suggestions & selection
-            if "join_key_suggestions" not in st.session_state:
-                st.session_state["join_key_suggestions"] = None
-            if "pick_sugg_idx" not in st.session_state:
-                st.session_state["pick_sugg_idx"] = 0
-
-            cA, cB, _ = st.columns([1,1,3])
-            with cA:
-                if st.button("Suggest join keys", type="primary", key="btn_suggest_keys"):
-                    try:
-                        sugg = suggest_join_keys(fdf_primary, fdf_secondary, top_k=30)
-                        st.session_state["join_key_suggestions"] = sugg
-                        if isinstance(sugg, pd.DataFrame) and not sugg.empty:
-                            st.session_state["pick_sugg_idx"] = 0
-                    except Exception as e:
-                        st.error(f"Suggestion failed: {e}")
-
-            with cB:
-                # convenience: clear suggestions
-                if st.button("Clear", key="btn_clear_sugg"):
-                    st.session_state["join_key_suggestions"] = None
-
-            sugg = st.session_state.get("join_key_suggestions")
-
-            def _apply_mapping_row(row):
-                """Prefill Merge UI using a chosen suggestion row."""
-                left_col = str(row["left_col"])
-                right_col = str(row["right_col"])
-                same_name = (left_col == right_col)
-
-                # We'll assume Primary is the left and Secondary is the right for suggestions
-                st.session_state["merge_left_ds"]  = "Primary"
-                st.session_state["merge_right_ds"] = "Secondary"
-
-                if same_name:
-                    st.session_state["merge_key_mode"]    = "Use common column names"
-                    st.session_state["merge_keys_common"] = [left_col]
-                    st.session_state["merge_left_keys"]   = []
-                    st.session_state["merge_right_keys"]  = []
+    def update_progress(group_name, model_name, fold_num):
+        nonlocal operation_count
+        operation_count += 1
+        progress = operation_count / total_operations if total_operations > 0 else 1
+        progress_bar.progress(progress)
+        
+        elapsed_time = time.time() - start_time
+        if operation_count > 0:
+            avg_time_per_op = elapsed_time / operation_count
+            remaining_ops = total_operations - operation_count
+            estimated_remaining = avg_time_per_op * remaining_ops
+            
+            status_text.text(f"Processing: {model_name} | {group_name} | Fold {fold_num}/{k_folds} | ~{estimated_remaining:.0f}s remaining")
+    
+    # ═════════════════════════════════════════════════════════════════════════
+    # PROCESS REGULAR MODELS (grouped by ALL keys)
+    # ═════════════════════════════════════════════════════════════════════════
+    for gvals, gdf in group_list_regular:
+        gvals = (gvals,) if not isinstance(gvals, tuple) else gvals
+        group_display_name = " | ".join([f"{k}={v}" for k, v in zip(grouping_keys, gvals)]) if grouping_keys else "All"
+        
+        present_cols = [c for c in X_columns if c in gdf.columns]
+        if len(present_cols) < len(X_columns):
+            for mname in regular_models.keys():
+                for fold in range(k_folds):
+                    update_progress(group_display_name, mname, fold + 1)
+            continue
+        
+        X_full = gdf[present_cols].fillna(0).copy()
+        y_full = gdf[target_col].copy()
+        
+        n_samples = len(X_full)
+        n_features = len(present_cols)
+        
+        # CRITICAL FIX: Check for overfitting conditions
+        min_samples_needed = max(k_folds, n_features * 2)  # Need at least 2x features for stable modeling
+        
+        if n_samples < min_samples_needed:
+            st.warning(f"⚠️ Skipping {group_display_name}: Only {n_samples} samples but need {min_samples_needed} (have {n_features} features)")
+            for mname in regular_models.keys():
+                for fold in range(k_folds):
+                    update_progress(group_display_name, mname, fold + 1)
+            continue
+        
+        # ADAPTIVE K-FOLD: Reduce folds for smaller groups
+        adaptive_k = k_folds
+        if n_samples < 20:
+            adaptive_k = 2  # Use 2-fold for very small groups
+        elif n_samples < 50:
+            adaptive_k = min(3, k_folds)  # Use 3-fold for small groups
+        
+        kf = KFold(n_splits=adaptive_k, shuffle=True, random_state=42)
+        
+        if adaptive_k != k_folds:
+            st.info(f"ℹ️ {group_display_name}: Using {adaptive_k}-fold CV (only {n_samples} samples)")
+        
+        for mname, mdl in regular_models.items():
+            fold_results = []
+            
+            # Split data into train/warmup/holdout if RLS is enabled
+            if enable_rls and holdout_weeks > 0:
+                gdf_sorted = gdf.sort_index()
+                n_total = len(gdf_sorted)
+                
+                # NEW: Three-way split
+                n_train = n_total - holdout_weeks - warmup_weeks  # weeks 1-44
+                n_warmup_end = n_total - holdout_weeks             # up to week 48
+                
+                # Check if enough data for warmup approach
+                min_train_needed = 10
+                if n_train < min_train_needed:
+                    st.warning(f"⚠️ {group_display_name}: Not enough data for {warmup_weeks}-week warmup + {holdout_weeks}-week holdout. Using full data.")
+                    train_df = gdf_sorted
+                    warmup_df = None
+                    holdout_df = None
+                    use_holdout_for_group = False
                 else:
-                    st.session_state["merge_key_mode"]    = "Map different column names"
-                    st.session_state["merge_left_keys"]   = [left_col]
-                    st.session_state["merge_right_keys"]  = [right_col]
-                    st.session_state["merge_keys_common"] = []
-
-                # sensible defaults for key normalization
-                st.session_state["merge_norm_strip"]       = True
-                st.session_state["merge_norm_as_str"]      = True
-                st.session_state.setdefault("merge_norm_lower", False)
-                st.session_state["merge_exclude_missing"]  = True  # default on
-
-            if isinstance(sugg, pd.DataFrame) and not sugg.empty:
-                # Show the ranked suggestions with the most useful fields up front
-                st.dataframe(
-                    sugg.assign(
-                        pair=lambda d: d["left_col"].astype(str) + " ⇄ " + d["right_col"].astype(str)
-                    )[
-                        ["pair","score","relation_guess","jaccard","left_cov","right_cov",
-                         "name_sim","left_uni_ratio","right_uni_ratio","type_pair"]
-                    ],
-                    use_container_width=True,
-                    hide_index=True,
-                    height=260
-                )
-
-                st.caption(
-                    "Score blends value overlap (Jaccard & coverage), name similarity, type compatibility, "
-                    "and a preference for 1:1 / 1:M relationships."
-                )
-
-                idx = st.selectbox(
-                    "Pick a mapping to pre-fill Merge",
-                    options=list(range(len(sugg))),
-                    index=st.session_state.get("pick_sugg_idx", 0),
-                    format_func=lambda i: f"{sugg.loc[i,'left_col']} ⇄ {sugg.loc[i,'right_col']} "
-                                          f"(score {sugg.loc[i,'score']:.2f}, {sugg.loc[i,'relation_guess']})",
-                    key="pick_sugg_idx",
-                )
-
-                b1, b2 = st.columns([1,1])
-                with b1:
-                    if st.button("Use this mapping", key="btn_apply_mapping"):
-                        row = sugg.loc[idx]
-                        _apply_mapping_row(row)
-                        st.success(
-                            f"Pre-filled Merge with {row['left_col']} ⇄ {row['right_col']} "
-                            f"({row['relation_guess']}, score {row['score']:.2f})"
-                        )
-                        st.rerun()
-                with b2:
-                    if st.button("Use top suggestion", key="btn_apply_top"):
-                        row = sugg.iloc[0]
-                        _apply_mapping_row(row)
-                        st.success(
-                            f"Pre-filled Merge with {row['left_col']} ⇄ {row['right_col']} "
-                            f"({row['relation_guess']}, score {row['score']:.2f})"
-                        )
-                        st.rerun()
-            else:
-                st.info("Click **Suggest join keys** to analyze both datasets.")
-    # ---------- /Key suggestions ----------
-
-    # ---------- Merge filtered datasets (simplified and guided) ----------
-    have_both = isinstance(fdf_primary, pd.DataFrame) and not fdf_primary.empty and \
-                isinstance(sec_df, pd.DataFrame) and not sec_df.empty
-
-    if have_both:
-        st.markdown("---")
-        st.markdown('<div class="section-header" style="background: linear-gradient(135deg, #458EE2 0%, #5A9EFF 100%);">🔗 **Dataset Merging & Integration**</div>', unsafe_allow_html=True)
-        with st.expander("🚀 **Advanced Merge Operations**", expanded=True):
-            st.markdown("**Step 1: Choose your datasets**")
-            st.caption("Primary dataset will be on the left, Secondary dataset will be on the right")
-            
-            # Show dataset info
-            col1, col2 = st.columns(2)
-            with col1:
-                st.markdown("**Primary Dataset**")
-                st.caption(f"Shape: {fdf_primary.shape[0]:,} rows × {fdf_primary.shape[1]:,} cols")
-                st.dataframe(fdf_primary.head(3), use_container_width=True, height=120)
-            
-            with col2:
-                st.markdown("**Secondary Dataset**")
-                st.caption(f"Shape: {sec_df.shape[0]:,} rows × {sec_df.shape[1]:,} cols")
-                st.dataframe(sec_df.head(3), use_container_width=True, height=120)
-
-            st.markdown("**Step 2: Choose merge options**")
-            with st.form("merge_options_form"):
-                merge_type = st.selectbox(
-                    "How do you want to merge?",
-                    options=[
-                        "Keep all rows from Primary, add matching data from Secondary (Left Join)",
-                        "Keep all rows from Secondary, add matching data from Primary (Right Join)", 
-                        "Keep only rows that match in both datasets (Inner Join)",
-                        "Keep all rows from both datasets (Outer Join)"
-                    ],
-                    index=0,
-                    help="Left Join is usually what you want - keeps all your primary data and adds matching secondary data"
-                )
-                merge_options_submit = st.form_submit_button("Apply merge options")
-            
-            # Map selection to pandas merge type
-            merge_type_map = {
-                "Keep all rows from Primary, add matching data from Secondary (Left Join)": "left",
-                "Keep all rows from Secondary, add matching data from Primary (Right Join)": "right",
-                "Keep only rows that match in both datasets (Inner Join)": "inner", 
-                "Keep all rows from both datasets (Outer Join)": "outer"
-            }
-            how = merge_type_map[merge_type]
-
-            st.markdown("**Step 3: Choose merge keys**")
-            
-            # Find common columns
-            primary_cols = list(fdf_primary.columns)
-            secondary_cols = list(sec_df.columns)
-            common_cols = sorted(set(primary_cols).intersection(set(secondary_cols)))
-            
-            if common_cols:
-                st.success(f"✅ Found {len(common_cols)} common column(s): {', '.join(common_cols[:5])}{'...' if len(common_cols) > 5 else ''}")
-                
-                # Auto-suggest the best key
-                best_key = None
-                if common_cols:
-                    # Look for common key-like names
-                    key_like_names = ['id', 'key', 'code', 'name', 'product', 'customer', 'order', 'invoice']
-                    for col in common_cols:
-                        col_lower = col.lower()
-                        if any(key_word in col_lower for key_word in key_like_names):
-                            best_key = col
-                            break
-                    if not best_key and common_cols:
-                        best_key = common_cols[0]  # fallback to first common column
-                
-                if best_key:
-                    st.info(f"💡 Suggested key: **{best_key}** (auto-detected)")
-                
-                # Let user choose keys (defer effect until submit)
-                with st.form("merge_keys_form"):
-                    selected_keys = st.multiselect(
-                        "Select merge key(s) - columns that should match between datasets",
-                        options=common_cols,
-                        default=[best_key] if best_key else [],
-                        help="Choose columns that contain the same values in both datasets (e.g., product ID, customer ID)"
-                    )
-                    keys_submit = st.form_submit_button("Apply keys")
-                
-                if selected_keys:
-                                st.markdown("**Step 4: Data Preparation & Merge**")
-            
-            # Enhanced key normalization options in organized columns
-            st.markdown("**🔧 Key Normalization Settings** (to ensure proper matching)")
-            
-            # First row of options
-            norm_row1 = st.columns(4)
-            with norm_row1[0]:
-                normalize_keys = st.checkbox("Normalize keys", value=True, 
-                                            help="Clean and standardize key values for better matching")
-            with norm_row1[1]:
-                strip_spaces = st.checkbox("Strip spaces", value=True,
-                                          help="Remove leading/trailing whitespace")
-            with norm_row1[2]:
-                convert_to_str = st.checkbox("Convert to string", value=True,
-                                            help="Convert all keys to string format")
-            with norm_row1[3]:
-                case_insensitive = st.checkbox("Case insensitive", value=False,
-                                              help="Treat uppercase/lowercase as same")
-            
-            # Second row of options
-            norm_row2 = st.columns(3)
-            with norm_row2[0]:
-                memory_limit = st.selectbox(
-                    "Memory limit for merge:",
-                    options=["1 GB", "2 GB", "5 GB", "10 GB", "Unlimited"],
-                    index=1,
-                    help="Prevent memory overflow during large merges"
-                )
-            with norm_row2[1]:
-                max_result_rows = st.number_input(
-                    "Max result rows:",
-                    min_value=1000000,
-                    max_value=100000000,
-                    value=10000000,
-                    step=1000000,
-                    help="Stop merge if result would exceed this limit"
-                )
-            with norm_row2[2]:
-                show_memory_usage = st.checkbox("Show memory usage", value=True,
-                                               help="Display memory consumption during merge")
-            
-            # Prepare dataframes with normalized keys
-            left_df = fdf_primary.copy()
-            right_df = sec_df.copy()
-            
-            # Normalize keys if requested
-            if normalize_keys:
-                for key in selected_keys:
-                    # Left dataset
-                    if key in left_df.columns:
-                        # Smart numeric normalization
-                        if pd.api.types.is_numeric_dtype(left_df[key]):
-                            # Convert to numeric first, then to string to remove .0
-                            left_df[key] = pd.to_numeric(left_df[key], errors='coerce').astype(str)
-                        elif convert_to_str:
-                            left_df[key] = left_df[key].astype(str)
-                        
-                        if strip_spaces:
-                            left_df[key] = left_df[key].str.strip()
-                        if case_insensitive:
-                            left_df[key] = left_df[key].str.lower()
-                        # Remove 'nan' strings and .0 from numeric strings
-                        left_df[key] = left_df[key].replace(['nan', 'None', ''], pd.NA)
-                        # Remove .0 from numeric strings (e.g., '5897.0' -> '5897')
-                        left_df[key] = left_df[key].str.replace(r'\.0$', '', regex=True)
+                    train_df = gdf_sorted.iloc[:n_train]                # weeks 1-44
+                    warmup_df = gdf_sorted.iloc[n_train:n_warmup_end]   # weeks 45-48
+                    holdout_df = gdf_sorted.iloc[n_warmup_end:]         # weeks 49-52
+                    use_holdout_for_group = True
                     
-                    # Right dataset  
-                    if key in right_df.columns:
-                        # Smart numeric normalization
-                        if pd.api.types.is_numeric_dtype(right_df[key]):
-                            # Convert to numeric first, then to string to remove .0
-                            right_df[key] = pd.to_numeric(right_df[key], errors='coerce').astype(str)
-                        elif convert_to_str:
-                            right_df[key] = right_df[key].astype(str)
-                        
-                        if strip_spaces:
-                            right_df[key] = right_df[key].str.strip()
-                        if case_insensitive:
-                            right_df[key] = right_df[key].str.lower()
-                        # Remove 'nan' strings and .0 from numeric strings
-                        right_df[key] = right_df[key].replace(['nan', 'None', ''], pd.NA)
-                        # Remove .0 from numeric strings (e.g., '5897.0' -> '5897')
-                        right_df[key] = right_df[key].str.replace(r'\.0$', '', regex=True)
-            
-            # Drop rows with missing keys
-            left_df = left_df.dropna(subset=selected_keys)
-            right_df = right_df.dropna(subset=selected_keys)
-            
-            # Show sample of normalized key values
-            col_a, col_b = st.columns(2)
-            with col_a:
-                st.markdown(f"**Sample {selected_keys[0]} values from Primary (normalized):**")
-                if not left_df.empty:
-                    sample_primary = left_df[selected_keys[0]].head(10).tolist()
-                    st.code(sample_primary)
-                    # Show data type info
-                    st.caption(f"Data type: {left_df[selected_keys[0]].dtype}")
-                else:
-                    st.warning("No valid keys after normalization")
-            
-            with col_b:
-                st.markdown(f"**Sample {selected_keys[0]} values from Secondary (normalized):**")
-                if not right_df.empty:
-                    sample_secondary = right_df[selected_keys[0]].head(10).tolist()
-                    st.code(sample_secondary)
-                    # Show data type info
-                    st.caption(f"Data type: {right_df[selected_keys[0]].dtype}")
-                else:
-                    st.warning("No valid keys after normalization")
-            
-            # Simple merge button - always show when keys are selected
-            if selected_keys:
-                st.markdown("---")
-                st.markdown("### 🚀 Ready to Merge!")
-                st.info(f"📊 **Selected {len(selected_keys)} merge key(s):** {', '.join(selected_keys)}")
-                
-                # Simple merge button
-                if st.button("🚀 Merge Now", type="primary", use_container_width=True):
+                    # Validate data splits to ensure no overlap
                     try:
-                        # Basic validation
-                        if not left_df.empty and not right_df.empty:
-                            # Simple merge without complex analysis for now
-                            with st.spinner(f"Merging {len(left_df):,} × {len(right_df):,} rows..."):
-                                merged_df = pd.merge(
-                                    left_df,
-                                    right_df,
-                                    how=how,
-                                    left_on=selected_keys,
-                                    right_on=selected_keys,
-                                    suffixes=('_primary', '_secondary'),
-                                    copy=False,
-                                    indicator=True
-                                )
-                            
-                            st.session_state["merged_df"] = merged_df
-                            
-                            # Show merge statistics
-                            merge_stats = merged_df['_merge'].value_counts()
-                            st.success(f"✅ Merge successful! Result: **{merged_df.shape[0]:,} rows × {merged_df.shape[1]:,} cols**")
-                            
-                            # Display merge indicator statistics
-                            if '_merge' in merged_df.columns:
-                                st.caption("**Merge Statistics:**")
-                                for category, count in merge_stats.items():
-                                    if category == 'both':
-                                        st.caption(f"✅ Matched in both: {count:,} rows")
-                                    elif category == 'left_only':
-                                        st.caption(f"⬅️ Only in Primary: {count:,} rows")
-                                    elif category == 'right_only':
-                                        st.caption(f"➡️ Only in Secondary: {count:,} rows")
-                                
-                                # Remove merge indicator column for cleaner output
-                                merged_df = merged_df.drop('_merge', axis=1)
-                            
-                            # Show result
-                            st.markdown("**Merged dataset preview:**")
-                            st.dataframe(merged_df.head(100), use_container_width=True, height=400)
-                            
-                            # Download option
-                            csv_bytes = merged_df.to_csv(index=False).encode("utf-8")
-                            st.download_button(
-                                "📥 Download merged CSV",
-                                data=csv_bytes,
-                                file_name="merged_dataset.csv",
-                                mime="text/csv",
-                                use_container_width=True
+                        validate_rls_data_splits(train_df, warmup_df, holdout_df)
+                    except ValueError as e:
+                        st.error(f"Data split validation failed: {e}")
+                        use_holdout_for_group = False
+            else:
+                train_df = gdf
+                warmup_df = None
+                holdout_df = None
+                use_holdout_for_group = False
+
+            
+            # Use TRAIN data for CV (not full data)
+            X_full = train_df[present_cols].fillna(0).copy()
+            y_full = train_df[target_col].copy()
+            
+            display_name = f"{mname} + RLS" if use_holdout_for_group else mname
+
+            
+            # Regular model processing
+            for fold_id, (tr_idx, te_idx) in enumerate(kf.split(X_full, y_full), 1):
+                update_progress(group_display_name, mname, fold_id)
+                
+                X_tr, X_te = X_full.iloc[tr_idx].copy(), X_full.iloc[te_idx].copy()
+                y_tr, y_te = y_full.iloc[tr_idx].copy(), y_full.iloc[te_idx].copy()
+                
+                # Store original y values for metrics calculation
+                y_tr_original = y_tr.copy()
+                y_te_original = y_te.copy()
+                
+                # Apply log transformation if requested
+                if log_transform_y:
+                    y_tr = np.log1p(y_tr)  # log(1 + y)
+                    y_te = np.log1p(y_te)
+                
+                # Standardization
+                scaler = {}
+                # Only check if model itself is RLS (not wrapper)
+                if isinstance(mdl, RecursiveLeastSquares):
+                    cols_to_scale = list(X_tr.columns)
+                elif std_cols:
+                    cols_to_scale = [c for c in std_cols if c in X_tr.columns]
+                else:
+                    cols_to_scale = []
+
+                if cols_to_scale:
+                    sc = StandardScaler().fit(X_tr[cols_to_scale])
+                    X_tr[cols_to_scale] = sc.transform(X_tr[cols_to_scale])
+                    X_te[cols_to_scale] = sc.transform(X_te[cols_to_scale])
+                    scaler = {c: (m, s) for c, m, s in zip(cols_to_scale, sc.mean_, sc.scale_)}
+
+                # Train model (no RLS wrapper handling)
+                model_copy = clone(mdl)
+
+                # Fit based on model type
+                if isinstance(model_copy, (CustomConstrainedRidge, ConstrainedLinearRegression)):
+                    model_copy.fit(X_tr.values, y_tr.values, X_tr.columns.tolist())
+                    y_tr_pred = model_copy.predict(X_tr.values)
+                    y_te_pred = model_copy.predict(X_te.values)
+                    B0_std, B1_std = model_copy.intercept_, model_copy.coef_
+                elif isinstance(model_copy, StatsMixedEffectsModel):
+                    tr_orig_idx = X_tr.index
+                    te_orig_idx = X_te.index
+                    
+                    grp_col = model_copy.group_col
+                    
+                    if '_' in grp_col and grp_col not in gdf.columns:
+                        component_keys = grp_col.split('_')
+                        if all(k in gdf.columns for k in component_keys):
+                            groups_tr_values = gdf.loc[tr_orig_idx, component_keys].astype(str).apply(
+                                lambda row: "_".join(row), axis=1
                             )
-                            
-                            # Save to DB option
-                            with st.expander("💾 Save to database (optional)"):
-                                save_name = st.text_input("Table name:", value="merged_dataset")
-                                if st.button("Save to SQLite"):
-                                    try:
-                                        tbl = _sanitize_table_name(save_name)
-                                        with _connect_db() as conn:
-                                            write_df_sqlite(merged_df, conn, tbl, overwrite=True, chunk_size=100_000)
-                                        st.success(f"Saved to table '{tbl}' in database")
-                                        st.cache_data.clear()
-                                    except Exception as e:
-                                        st.error(f"Save failed: {e}")
+                            groups_te_values = gdf.loc[te_orig_idx, component_keys].astype(str).apply(
+                                lambda row: "_".join(row), axis=1
+                            )
                         else:
-                            st.error("❌ Cannot merge: One or both datasets are empty after normalization")
-                    except Exception as e:
-                        st.error(f"❌ Merge failed: {str(e)}")
-                        st.info("💡 Try selecting different key columns or check if your data types match")
-            else:
-                st.info("Please select at least one merge key to continue")
+                            groups_tr_values = gdf.loc[tr_orig_idx, grouping_keys[0]]
+                            groups_te_values = gdf.loc[te_orig_idx, grouping_keys[0]]
+                    else:
+                        if grp_col in gdf.columns:
+                            groups_tr_values = gdf.loc[tr_orig_idx, grp_col]
+                            groups_te_values = gdf.loc[te_orig_idx, grp_col]
+                        else:
+                            groups_tr_values = gdf.loc[tr_orig_idx, grouping_keys[0]]
+                            groups_te_values = gdf.loc[te_orig_idx, grouping_keys[0]]
+                    
+                    model_copy.fit(X_tr, y_tr, groups_tr_values)
+                    y_tr_pred = model_copy.predict(X_tr, groups_tr_values)
+                    y_te_pred = model_copy.predict(X_te, groups_te_values)
+                    B0_std, B1_std = model_copy.intercept_, model_copy.coef_
+                else:
+                    model_copy.fit(X_tr, y_tr)
+                    y_tr_pred = model_copy.predict(X_tr)
+                    y_te_pred = model_copy.predict(X_te)
+                    B0_std, B1_std = model_copy.intercept_, model_copy.coef_
+
+                
+                # Reverse transform predictions if log was applied
+                if log_transform_y:
+                    y_tr_pred = np.expm1(y_tr_pred)  # exp(pred) - 1
+                    y_te_pred = np.expm1(y_te_pred)
+                    # Ensure non-negative predictions
+                    y_tr_pred = np.maximum(y_tr_pred, 0)
+                    y_te_pred = np.maximum(y_te_pred, 0)
+                
+                # Metrics (calculated on original scale)
+                r2_tr = r2_score(y_tr_original, y_tr_pred)
+                r2_te = r2_score(y_te_original, y_te_pred)
+                mape_tr = safe_mape(y_tr_original, y_tr_pred)
+                mape_te = safe_mape(y_te_original, y_te_pred)
+                mae_tr = np.mean(np.abs(y_tr_original - y_tr_pred))
+                mae_te = np.mean(np.abs(y_te_original - y_te_pred))
+                mse_tr = np.mean((y_tr_original - y_tr_pred)**2)
+                mse_te = np.mean((y_te_original - y_te_pred)**2)
+                rmse_tr = np.sqrt(mse_tr)
+                rmse_te = np.sqrt(mse_te)
+                
+                # Reverse standardization
+                raw_int, raw_coefs = B0_std, B1_std.copy()
+                for i, col in enumerate(present_cols):
+                    if col in scaler:
+                        mu, sd = scaler[col]
+                        raw_coefs[i] = raw_coefs[i] / sd
+                        raw_int -= raw_coefs[i] * mu
+                
+                # FIX: Mean X - calculate ONLY on TRAINING data to avoid leakage
+                mean_x = X_tr.mean(numeric_only=True).to_dict()
+                
+                # Create fold result
+                d = {k: v for k, v in zip(grouping_keys, gvals)}
+                d.update({
+                    "Model": display_name,
+                    "Fold": fold_id,
+                    "B0 (Original)": raw_int,
+                    "R2 Train": r2_tr,
+                    "R2 Test": r2_te,
+                    "MAPE Train": mape_tr,
+                    "MAPE Test": mape_te,
+                    "MAE Train": mae_tr,
+                    "MAE Test": mae_te,
+                    "MSE Train": mse_tr,
+                    "MSE Test": mse_te,
+                    "RMSE Train": rmse_tr,
+                    "RMSE Test": rmse_te,
+                })
+                
+                # Add mean X
+                for c, v in mean_x.items():
+                    d[c] = v
+                
+                # Add betas
+                for i, c in enumerate(present_cols):
+                    d[f"Beta_{c}"] = raw_coefs[i]
+                
+                fold_results.append(d)
+                
+                # Predictions
+                pr = gdf.loc[X_te.index].copy()
+                pr["Actual"] = y_te.values
+                pr["Predicted"] = y_te_pred
+                pr["Model"] = display_name
+                pr["Fold"] = fold_id
+                preds_records.append(pr)
             
-            # Fallback: manual column mapping if no common columns
-            if not common_cols:
-                st.warning("❌ No common column names found between datasets")
-                st.info("💡 Try renaming columns in one dataset to match the other, or use the 'Map different column names' option below")
+            # Report fold results: individual folds + aggregated
+            if fold_results:
+                fold_df = pd.DataFrame(fold_results)
                 
-                # Fallback: manual column mapping
-                st.markdown("**Alternative: Map different column names**")
-                col_a, col_b = st.columns(2)
-                with col_a:
-                    left_key = st.selectbox("Primary dataset key column:", options=primary_cols)
-                with col_b:
-                    right_key = st.selectbox("Secondary dataset key column:", options=secondary_cols)
+                # Add individual fold rows
+                rows.append(fold_df)
                 
-                if left_key and right_key:
-                    if st.button("🔗 Merge with different column names", type="primary"):
-                        try:
-                            merged_df = pd.merge(
-                                fdf_primary,
-                                sec_df,
-                                how=how,
-                                left_on=[left_key],
-                                right_on=[right_key],
-                                suffixes=('_primary', '_secondary'),
-                                copy=False
-                            )
-                            
-                            st.session_state["merged_df"] = merged_df
-                            st.success(f"✅ Merge successful! Result: **{merged_df.shape[0]:,} rows × {merged_df.shape[1]:,} cols**")
-                            
-                            st.markdown("**Merged dataset preview:**")
-                            st.dataframe(merged_df.head(100), use_container_width=True, height=400)
-                            
-                        except Exception as e:
-                            st.error(f"❌ Merge failed: {str(e)}")
-    else:
-        st.caption("To enable merging, load **both** Primary and Secondary datasets first.")
+                # Create aggregated row (average across folds)
+                # Identify keys
+                key_cols = [col for col in fold_df.columns if col in grouping_keys + list(getattr(mdl, 'group_keys', [])) or col == 'Model']
+                
+                # Numeric columns to average
+                numeric_cols = fold_df.select_dtypes(include=[np.number]).columns.tolist()
+                numeric_cols = [col for col in numeric_cols if col != 'Fold']
+                
+                # String columns to take first
+                string_cols = [col for col in fold_df.columns if col not in numeric_cols and col not in key_cols and col != 'Fold']
+                
+                # Aggregate
+                agg_dict = {}
+                for col in numeric_cols:
+                    agg_dict[col] = 'mean'
+                for col in string_cols:
+                    agg_dict[col] = 'first'
+                
+                aggregated = fold_df.groupby(key_cols).agg(agg_dict).reset_index()
+                aggregated['Fold'] = 'Avg'  # Mark as average row
+                rows.append(aggregated)
+            
+            # ═══════════════════════════════════════════════════════════════
+            # RLS HOLDOUT LOGIC: Train on 1-44, warmup 45-48, test 49-52
+            # CRITICAL: Skip per-model RLS when ensemble is enabled
+            # When ensemble is enabled, RLS runs ONLY on the ensemble (after CV)
+            # ═══════════════════════════════════════════════════════════════
+            if use_holdout_for_group and holdout_df is not None and not enable_ensemble:
+                # Train model on weeks 1-44 ONLY (for RLS initialization)
+                X_train_final = train_df[present_cols].fillna(0).copy()
+                y_train_final = train_df[target_col].copy()
+                y_train_final_original = y_train_final.copy()
+                
+                # Log data split sizes for verification
+                debug_msg = f"RLS Data Split for {display_name}: Train={len(train_df)}, Warmup={len(warmup_df)}, Holdout={len(holdout_df)}"
+                # st.caption(debug_msg)  # Uncomment for debugging
+                
+                if log_transform_y:
+                    y_train_final = np.log1p(y_train_final)
+                
+                # Standardize
+                scaler_final = {}
+                if isinstance(mdl, RecursiveLeastSquares):
+                    cols_to_scale_final = list(X_train_final.columns)
+                elif std_cols:
+                    cols_to_scale_final = [c for c in std_cols if c in X_train_final.columns]
+                else:
+                    cols_to_scale_final = []
+                
+                if cols_to_scale_final:
+                    sc_final = StandardScaler().fit(X_train_final[cols_to_scale_final])
+                    X_train_final[cols_to_scale_final] = sc_final.transform(X_train_final[cols_to_scale_final])
+                    scaler_final = {c: (m, s) for c, m, s in zip(cols_to_scale_final, sc_final.mean_, sc_final.scale_)}
+                
+                # Train model on weeks 1-44 for RLS initialization
+                rls_init_model = clone(mdl)
+                
+                if isinstance(rls_init_model, (CustomConstrainedRidge, ConstrainedLinearRegression)):
+                    rls_init_model.fit(X_train_final.values, y_train_final.values, X_train_final.columns.tolist())
+                elif isinstance(rls_init_model, StatsMixedEffectsModel):
+                    grp_col = rls_init_model.group_col
+                    if grp_col in gdf.columns:
+                        groups_values = train_df[grp_col]
+                    else:
+                        groups_values = train_df[grouping_keys[0]]
+                    rls_init_model.fit(X_train_final, y_train_final, groups_values)
+                else:
+                    rls_init_model.fit(X_train_final, y_train_final)
+                
+                # ═══════════════════════════════════════════════════════════════
+                # Prepare WARMUP data (weeks 45-48)
+                # ═══════════════════════════════════════════════════════════════
+                X_warmup = warmup_df[present_cols].fillna(0).copy()
+                y_warmup = warmup_df[target_col].copy()
+                y_warmup_original = y_warmup.copy()
+                
+                if log_transform_y:
+                    y_warmup = np.log1p(y_warmup)
+                
+                if cols_to_scale_final:
+                    X_warmup[cols_to_scale_final] = sc_final.transform(X_warmup[cols_to_scale_final])
+                
+                # ═══════════════════════════════════════════════════════════════
+                # Prepare HOLDOUT data (weeks 49-52)
+                # ═══════════════════════════════════════════════════════════════
+                X_holdout = holdout_df[present_cols].fillna(0).copy()
+                y_holdout = holdout_df[target_col].copy()
+                y_holdout_original = y_holdout.copy()
+                
+                if log_transform_y:
+                    y_holdout = np.log1p(y_holdout)
+                
+                if cols_to_scale_final:
+                    X_holdout[cols_to_scale_final] = sc_final.transform(X_holdout[cols_to_scale_final])
+                
+                # ═══════════════════════════════════════════════════════════════
+                # Apply RLS with warmup using lambda grid search
+                # ═══════════════════════════════════════════════════════════════
+                lambda_grid = rls_lambda_candidates if rls_lambda_candidates is not None else DEFAULT_RLS_LAMBDA_GRID
+                best_lambda = None
+                best_holdout_preds = None
+                best_rls_results = None
+                best_warmup_mae = None
 
-
-
-# -------- Hierarchy --------
-with hierarchy_tab:
-    if df is None or df.empty:
-        st.markdown('<div class="info-box">', unsafe_allow_html=True)
-        st.markdown("**📊 Hierarchy Analysis**")
-        st.markdown("Load a dataset in the sidebar to explore hierarchical relationships and build multi-level categorizations.")
-        st.markdown("</div>", unsafe_allow_html=True)
-    else:
-        st.markdown('<div class="section-header" style="background: linear-gradient(135deg, #FFBD59 0%, #FFCF87 100%); color: #333333;">🧬 **Hierarchical Data Analysis**</div>', unsafe_allow_html=True)
-        st.markdown("**Build multi-level hierarchies** (e.g., Category → Subcategory → Brand) to view parent→child mappings and counts.")
-
-        # Scope filter for entire hierarchy tab
-        filt_l, filt_r = st.columns(2)
-        with filt_l:
-            hier_filter_col = st.selectbox("Filter column (hierarchy scope)", options=[""] + list(df.columns), index=0, key="hier_filter_col")
-        with filt_r:
-            if hier_filter_col:
-                try:
-                    vals = pd.Index(df[hier_filter_col].astype(str).dropna().unique())
-                    vals = pd.Index(sorted(vals))
-                    hier_filter_val = st.selectbox("Filter value", options=[""] + list(vals)[:2000], index=0, key="hier_filter_val")
-                except Exception:
-                    hier_filter_val = ""
-            else:
-                hier_filter_val = ""
-        df_h = df
-        if hier_filter_col and hier_filter_val:
-            try:
-                df_h = df[df[hier_filter_col].astype(str) == hier_filter_val]
-            except Exception:
-                df_h = df
-
-        level_cols = st.multiselect("Hierarchy levels (in order)", options=list(df.columns), key="hier_levels")
-        if level_cols:
-            # 1) Level-wise funnel-style bar (unique values per level)
-            meta = pd.DataFrame({
-                "level": level_cols,
-                "unique_values": [df_h[c].nunique(dropna=False) for c in level_cols],
-            })
-            meta["level_order"] = range(len(meta))
-            st.markdown("**Level-wise coverage (unique values per selected level)**")
-            funnel = (
-                alt.Chart(meta)
-                .mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4)
-                .encode(
-                    y=alt.Y("level:N", sort=level_cols, title="Level"),
-                    x=alt.X("unique_values:Q", title="Unique values"),
-                    tooltip=["level", "unique_values"],
-                    color=alt.value("#4c78a8"),
-                )
-                .properties(height=max(120, 40 * len(level_cols)))
-            )
-            st.altair_chart(funnel, use_container_width=True)
-
-            # 2) Path counts table + bar of top paths
-            @st.cache_data(show_spinner=False)
-            def _group_counts_cached(frame: pd.DataFrame, cols: tuple[str, ...]) -> pd.DataFrame:
-                return frame.groupby(list(cols), dropna=False).size().reset_index(name="rows")
-
-            group_counts = _group_counts_cached(df_h, tuple(level_cols))
-            # Render NaN as <NA> for clearer labels
-            lab = group_counts[level_cols].copy()
-            for c in level_cols:
-                lab[c] = lab[c].where(lab[c].notna(), other="<NA>")
-            group_counts["path"] = lab.astype(str).agg(" / ".join, axis=1)
-
-            st.markdown("**Path counts** (groupby across selected levels)")
-            show_full = st.checkbox("Show full table (may be large)", value=False, key="show_full_paths")
-            gc_sorted = group_counts.sort_values("rows", ascending=False)
-            if show_full:
-                st_dataframe_safe(gc_sorted, n=5000, use_container_width=True, height=420)
-            else:
-                st_dataframe_safe(gc_sorted.head(500), n=500, use_container_width=True, height=420)
-
-            st.markdown("**Top paths by rows**")
-            top_paths = group_counts.nlargest(20, "rows")
-            bar = (
-                alt.Chart(top_paths)
-                .mark_bar()
-                .encode(
-                    x=alt.X("rows:Q", title="Rows"),
-                    y=alt.Y("path:N", sort="-x", title=""),
-                    tooltip=["path", "rows"],
-                    color=alt.value("#72b7b2"),
-                )
-                .properties(height=max(200, 18 * len(top_paths)))
-            )
-            st.altair_chart(bar, use_container_width=True)
-
-            with st.expander("Hierarchy explorer (nested)", expanded=False):
-                st.caption("Step-by-step selector; choose a value at each level to drill down.")
-                sub = df_h.copy()
-                for i, lvl in enumerate(level_cols):
-                    try:
-                        vals = sub[lvl].astype(str).fillna("<NA>").value_counts().reset_index()
-                        vals.columns = [lvl, "rows"]
-                        options = [""] + list(vals[lvl].head(2000))
-                        sel = st.selectbox(f"{i+1}) {lvl}", options=options, index=0, key=f"hexp_sel_{i}_{lvl}")
-                        if not sel:
-                            break
-                        sub = sub[sub[lvl].astype(str).fillna("<NA>") == sel]
-                    except Exception as e:
-                        st.warning(f"Failed to load level '{lvl}': {e}")
-                        break
-                st.metric("Rows at current selection", f"{len(sub):,}")
-                st_dataframe_safe(sub, n=100, use_container_width=True)
-
-            st.markdown("---")
-            st.subheader("🔀 Cross hierarchy drill")
-
-            if len(level_cols) < 2:
-                st.info("Select at least two hierarchy levels above.")
-            else:
-                ctrl1, ctrl2 = st.columns(2)
-                with ctrl1:
-                    min_rows = st.number_input("Min rows to display", min_value=0, max_value=1_000_000, value=0, step=10, key="xh_min_rows")
-                with ctrl2:
-                    pair_options = [f"{level_cols[i]} vs {level_cols[i+1]}" for i in range(len(level_cols) - 1)]
-                    pair_idx = st.radio(
-                        "Level pair",
-                        options=list(range(len(pair_options))),
-                        index=0,
-                        format_func=lambda i: pair_options[i],
-                        horizontal=True,
-                        key="xh_pair_idx",
+                for candidate_lambda in lambda_grid:
+                    candidate_results = apply_rls_on_holdout(
+                        trained_model=rls_init_model,
+                        X_train=X_train_final.values,
+                        y_train=y_train_final.values,
+                        X_warmup=X_warmup.values,
+                        y_warmup=y_warmup.values,
+                        X_holdout=X_holdout.values,
+                        y_holdout=y_holdout.values,
+                        feature_names=present_cols,
+                        forgetting_factor=candidate_lambda,
+                        nonnegative_features=positive_constraints,
+                        nonpositive_features=negative_constraints
                     )
 
-                with st.expander("Counts matrix (adjacent levels)", expanded=True):
-                    try:
-                        row_level = level_cols[pair_idx]
-                        col_level = level_cols[pair_idx + 1]
-                        sub2 = df_h.copy()
-                        sub2[row_level] = sub2[row_level].astype(str).fillna("<NA>")
-                        sub2[col_level] = sub2[col_level].astype(str).fillna("<NA>")
-                        mat = pd.crosstab(sub2[row_level], sub2[col_level])
-                        if min_rows > 0:
-                            mat = mat.where(mat >= min_rows, other=0)
-                        row_order = mat.sum(axis=1).sort_values(ascending=False).index
-                        col_order = mat.sum(axis=0).sort_values(ascending=False).index
-                        MAX_DIM = 80
-                        row_order = row_order[:MAX_DIM]
-                        col_order = col_order[:MAX_DIM]
-                        mat = mat.loc[row_order, col_order]
-                        cm_l, cm_r = st.columns([3, 1])
-                        with cm_l:
-                            # Index could be giant ints; make safe by resetting
-                            st.dataframe(mat.reset_index(), use_container_width=True, height=min(800, 32 * (len(mat.index) + 2)))
-                        with cm_r:
-                            st.markdown("**Unique counts**")
-                            uc = pd.DataFrame({
-                                row_level: [sub2[row_level].nunique()],
-                                col_level: [sub2[col_level].nunique()],
-                            }).T.reset_index()
-                            uc.columns = ["level", "nunique"]
-                            st_dataframe_safe(uc, n=200, use_container_width=True, height=120)
-
-                            st.markdown("**Row-level mapping**")
-                            row_map = sub2.groupby(row_level)[col_level].nunique().rename("unique_children").to_frame()
-                            row_tot = sub2.groupby(row_level).size().rename("rows_total")
-                            row_map = row_map.join(row_tot).sort_values(["unique_children", "rows_total"], ascending=[False, False]).reset_index()
-                            row_filter = st.selectbox(
-                                "Filter",
-                                options=["All", "Only unique (1 child)", "Only non-unique (>1)"],
-                                index=0,
-                                key=f"row_map_filter_{row_level}_{col_level}",
-                            )
-                            if row_filter == "Only unique (1 child)":
-                                row_map = row_map[row_map["unique_children"] == 1]
-                            elif row_filter == "Only non-unique (>1)":
-                                row_map = row_map[row_map["unique_children"] > 1]
-                            st_dataframe_safe(row_map.head(300), n=300, use_container_width=True, height=300)
-
-                            st.markdown("**Column-level mapping**")
-                            col_map = sub2.groupby(col_level)[row_level].nunique().rename("unique_parents").to_frame()
-                            col_tot = sub2.groupby(col_level).size().rename("rows_total")
-                            col_map = col_map.join(col_tot).sort_values(["unique_parents", "rows_total"], ascending=[False, False]).reset_index()
-                            col_filter = st.selectbox(
-                                "Filter",
-                                options=["All", "Only unique (1 parent)", "Only non-unique (>1)"],
-                                index=0,
-                                key=f"col_map_filter_{row_level}_{col_level}",
-                            )
-                            if col_filter == "Only unique (1 parent)":
-                                col_map = col_map[col_map["unique_parents"] == 1]
-                            elif col_filter == "Only non-unique (>1)":
-                                col_map = col_map[col_map["unique_parents"] > 1]
-                            st_dataframe_safe(col_map.head(300), n=300, use_container_width=True, height=300)
-                    except Exception as e:
-                        st.warning(f"Counts matrix failed: {e}")
-
-                # Uniqueness across remaining levels
-                with st.expander("Uniqueness across remaining levels", expanded=False):
-                    try:
-                        anchor_level = st.selectbox("Anchor level", options=level_cols, index=0, key="anchor_level_uniq")
-                        other_levels = [lvl for lvl in level_cols if lvl != anchor_level]
-                        if not other_levels:
-                            st.info("Select at least two levels to compute uniqueness.")
+                    # CRITICAL FIX: Use WARMUP predictions for lambda selection to avoid data leakage
+                    warmup_preds = candidate_results.get('warmup_predictions', np.array([]))
+                    
+                    if len(warmup_preds) > 0:
+                        if log_transform_y:
+                            warmup_preds_transformed = np.expm1(warmup_preds)
+                            warmup_preds_transformed = np.maximum(warmup_preds_transformed, 0)
                         else:
-                            dfu = df_h.copy()
-                            dfu = dfu[[anchor_level] + other_levels].copy()
-                            for c in [anchor_level] + other_levels:
-                                dfu[c] = dfu[c].astype(str).fillna("<NA>")
-                            combo = dfu[other_levels].agg(" / ".join, axis=1)
-                            tmp = pd.DataFrame({anchor_level: dfu[anchor_level], "combo": combo})
-                            stats = tmp.groupby(anchor_level).agg(unique_combos=("combo", "nunique"), rows_total=("combo", "size")).reset_index()
-                            flt = st.selectbox("Filter", options=["All", "Only unique (1 combo)", "Only non-unique (>1)"], index=0)
-                            if flt == "Only unique (1 combo)":
-                                stats = stats[stats["unique_combos"] == 1]
-                            elif flt == "Only non-unique (>1)":
-                                stats = stats[stats["unique_combos"] > 1]
-                            st_dataframe_safe(stats.head(1000), n=1000, use_container_width=True, height=360)
-                    except Exception as e:
-                        st.warning(f"Uniqueness computation failed: {e}")
-
-                # Treemap across the chosen levels
-                with st.expander("Tree view (Treemap)", expanded=True):
-                    cmin, cmax = st.columns(2)
-                    with cmin:
-                        min_rows_t = st.number_input("Min rows per node (treemap)", min_value=0, max_value=1_000_000, value=int(min_rows), step=10)
-                    with cmax:
-                        max_rows_t = st.number_input("Max rows per node (treemap, 0 = no max)", min_value=0, max_value=1_000_000, value=0, step=10)
-                    try:
-                        counts = (
-                            df_h[level_cols]
-                            .copy()
-                            .astype({lvl: str for lvl in level_cols})
-                            .fillna("<NA>")
-                            .value_counts(level_cols)
-                            .reset_index(name="rows")
-                        )
-                        if min_rows_t > 0:
-                            counts = counts[counts["rows"] >= min_rows_t]
-                        if max_rows_t > 0:
-                            counts = counts[counts["rows"] <= max_rows_t]
-                        first = level_cols[0]
-                        figt = px.treemap(counts, path=level_cols, values="rows", color=first)
-                        figt.update_traces(textinfo="label+value")
-                        figt.update_layout(height=700, uniformtext_minsize=10, uniformtext_mode="hide", margin=dict(t=10, l=0, r=0, b=0))
-                        st.plotly_chart(figt, use_container_width=True)
-                    except Exception as e:
-                        st.warning(f"Tree view failed: {e}")
-
-
-# -------- Sales / Group By (Tab 3) --------
-with sales_tab:
-    st.markdown('<div class="section-header" style="background: linear-gradient(135deg, #41C185 0%, #458EE2 100%);">📊 **Sales Analytics & Group By Operations**</div>', unsafe_allow_html=True)
-
-    # Load Secondary like Preview tab
-    sec_df_sales = None
-    if active_table_secondary:
-        try:
-            sec_df_sales = pd.read_sql_query(f"SELECT * FROM '{active_table_secondary}'", _connect_db())
-        except Exception as e:
-            st.markdown('<div class="warning-box">', unsafe_allow_html=True)
-            st.warning(f"⚠️ Failed to load secondary dataset from DB for Sales tab: {e}")
-            st.markdown("</div>", unsafe_allow_html=True)
-            sec_df_sales = st.session_state.get("secondary_df_buffer")
-    else:
-        sec_df_sales = st.session_state.get("secondary_df_buffer")
-
-    # Available sources
-    sources = []
-    if isinstance(df, pd.DataFrame) and not df.empty:
-        sources.append("Primary")
-    if isinstance(sec_df_sales, pd.DataFrame) and not sec_df_sales.empty:
-        sources.append("Secondary")
-
-    if not sources:
-        st.markdown('<div class="info-box">', unsafe_allow_html=True)
-        st.markdown("**📊 Sales Analytics Ready**")
-        st.markdown("Load at least one dataset (Primary or Secondary) to begin your sales analysis and group-by operations.")
-        st.markdown("</div>", unsafe_allow_html=True)
-        st.stop()
-
-    # 1) Pick dataset (Primary / Secondary)
-    sales_src = st.radio(
-        "Sales dataset",
-        options=sources,
-        index=0,
-        horizontal=True,
-        key="sales_tab_src"
-    )
-    base_df = df if sales_src == "Primary" else sec_df_sales
-    if base_df is None or base_df.empty:
-        st.error("Selected dataset is empty or not loaded properly.")
-        st.info("Please load a valid dataset first.")
-        cols = []
-    else:
-        cols = list(map(str, base_df.columns))
-
-    # Optional quick filter panel
-    with st.expander("🔎 Optional filters before aggregation", expanded=False):
-        fdf_sales = _build_filters_ui(base_df, key_prefix="sales")
-        st_dataframe_safe(fdf_sales, n=100, use_container_width=True, height=260)
-
-    work_df = fdf_sales if isinstance(fdf_sales, pd.DataFrame) else base_df
-
-    # ---------------- Computed columns (before group by) ----------------
-    st.markdown("---")
-    with st.expander("🧩 Computed columns (create before grouping)", expanded=False):
-        st.caption("Add one or more computed columns. They will be visible in the preview and available for grouping/aggregation.")
-
-        # Keep specs in session
-        if "sales_computed_specs" not in st.session_state:
-            st.session_state["sales_computed_specs"] = []
-
-        bmode = st.radio(
-            "Builder mode",
-            ["Column ±×÷ Column", "Column ±×÷ Constant", "IF condition… THEN … ELSE …", "Custom formula"],
-            horizontal=False,
-            key="sales_comp_mode"
-        )
-
-        new_name = st.text_input("New column name", value="", key="sales_comp_name")
-
-        spec = None
-        if bmode == "Column ±×÷ Column":
-            c1, c2, c3 = st.columns([2,1,2])
-            with c1:
-                a_col = st.selectbox("Left column", options=cols, key="sales_comp_a")
-            with c2:
-                op = st.selectbox("Operator", options=["+", "-", "*", "/", "//", "%"], key="sales_comp_op")
-            with c3:
-                b_col = st.selectbox("Right column", options=cols, key="sales_comp_b")
-            spec = {"mode":"binop_col", "name":new_name, "a":a_col, "op":op, "b":b_col}
-
-        elif bmode == "Column ±×÷ Constant":
-            c1, c2, c3 = st.columns([2,1,2])
-            with c1:
-                a_col = st.selectbox("Column", options=cols, key="sales_comp_col")
-            with c2:
-                op = st.selectbox("Operator", options=["+", "-", "*", "/", "//", "%"], key="sales_comp_op2")
-            with c3:
-                k = st.number_input("Constant", value=0.0, key="sales_comp_k")
-            spec = {"mode":"binop_const", "name":new_name, "a":a_col, "op":op, "k":k}
-
-        elif bmode == "IF condition… THEN … ELSE …":
-            c1, c2, c3, c4 = st.columns([2,1,2,2])
-            with c1:
-                a_col = st.selectbox("Column to test", options=cols, key="sales_comp_if_col")
-            with c2:
-                cmp_op = st.selectbox("Compare", options=[">", ">=", "==", "!=", "<=", "<"], key="sales_comp_cmp")
-            with c3:
-                rhs_mode = st.selectbox("Compare against", options=["Constant", "Column"], key="sales_comp_rhs_mode")
-            with c4:
-                rhs_val = (
-                    st.number_input("Constant", value=0.0, key="sales_comp_rhs_const")
-                    if rhs_mode == "Constant" else
-                    st.selectbox("Column", options=cols, key="sales_comp_rhs_col")
-                )
-            d1, d2 = st.columns(2)
-            with d1:
-                then_val = st.text_input("THEN value (use number; or column name in {curly})", value="1", key="sales_comp_then")
-            with d2:
-                else_val = st.text_input("ELSE value (number; or {column})", value="0", key="sales_comp_else")
-            spec = {"mode":"ifelse", "name":new_name, "a":a_col, "cmp":cmp_op, "rhs_mode":rhs_mode, "rhs":rhs_val, "then":then_val, "else":else_val}
-
-        else:  # Custom formula
-            st.caption("Use arithmetic with column names. Examples: `qty * price`, `(amount - discount) / amount`, `round(net_amount, 2)`")
-            formula = st.text_input("Formula", value="", key="sales_comp_formula")
-            st.caption("Allowed functions: round, abs; Operators: + - * / // % ** (columns must exist).")
-            spec = {"mode":"formula", "name":new_name, "expr":formula}
-
-        add_btn = st.button("➕ Add computed column", type="primary", key="sales_comp_add")
-        if add_btn:
-            if not new_name.strip():
-                st.error("Please give the new column a name.")
-            else:
-                st.session_state["sales_computed_specs"].append(spec)
-                st.success(f"Added computed column: {new_name}")
-
-        # Manage existing specs
-        specs = st.session_state["sales_computed_specs"]
-        if specs:
-            st.markdown("**Current computed columns**")
-            for i, s in enumerate(specs):
-                cols_rm = st.columns([6,1])
-                with cols_rm[0]:
-                    st.write(f"- `{s['name']}` · **{s['mode']}** → {s}")
-                with cols_rm[1]:
-                    if st.button("🗑️", key=f"sales_comp_del_{i}"):
-                        specs.pop(i)
-                        st.experimental_rerun()
-            if st.button("Clear all computed columns", key="sales_comp_clear"):
-                st.session_state["sales_computed_specs"] = []
-                st.experimental_rerun()
-
-        # Apply computed columns to a working copy for preview/aggregation
-        if work_df is None or work_df.empty:
-            st.warning("No working dataset available for computed columns.")
-            gdf_comp = None
-        else:
-            gdf_comp = work_df.copy()
-
-        def _safe_to_number_or_series(val, df_):
-            # number literal, {col} reference, or plain string -> try number
-            if isinstance(val, (int, float, np.number)):
-                return val
-            txt = str(val).strip()
-            if txt.startswith("{") and txt.endswith("}") and txt[1:-1] in df_.columns:
-                return df_[txt[1:-1]]
-            try:
-                return float(txt)
-            except Exception:
-                return txt  # leave as-is (may be a string assignment)
-
-        def _apply_spec(df_, s):
-            m = s["mode"]
-            name = s["name"]
-            out = None
-            try:
-                if m == "binop_col":
-                    A, B, op = df_[s["a"]], df_[s["b"]], s["op"]
-                    if op == "+": out = A + B
-                    elif op == "-": out = A - B
-                    elif op == "*": out = A * B
-                    elif op == "/": out = A / B.replace({0: np.nan}) if hasattr(B, "replace") else A / B
-                    elif op == "//": out = A // B.replace({0: np.nan}) if hasattr(B, "replace") else A // B
-                    elif op == "%": out = A % B
-                elif m == "binop_const":
-                    A, k, op = df_[s["a"]], s["k"], s["op"]
-                    if op == "+": out = A + k
-                    elif op == "-": out = A - k
-                    elif op == "*": out = A * k
-                    elif op == "/": out = A / (k if k != 0 else np.nan)
-                    elif op == "//": out = A // (k if k != 0 else np.nan)
-                    elif op == "%": out = A % k
-                elif m == "ifelse":
-                    A = df_[s["a"]]
-                    rhs = df_[s["rhs"]] if s["rhs_mode"] == "Column" else s["rhs"]
-                    cmp = s["cmp"]
-                    if s["rhs_mode"] == "Constant":
-                        rhs_series = rhs
+                            warmup_preds_transformed = warmup_preds
+                        
+                        # Calculate MAE on warmup period for hyperparameter selection
+                        candidate_warmup_mae = mean_absolute_error(y_warmup_original, warmup_preds_transformed)
                     else:
-                        rhs_series = rhs
-                    if cmp == ">": cond = A > rhs_series
-                    elif cmp == ">=": cond = A >= rhs_series
-                    elif cmp == "==": cond = A == rhs_series
-                    elif cmp == "!=": cond = A != rhs_series
-                    elif cmp == "<=": cond = A <= rhs_series
-                    elif cmp == "<": cond = A < rhs_series
-                    then_v = _safe_to_number_or_series(s["then"], df_)
-                    else_v = _safe_to_number_or_series(s["else"], df_)
-                    out = np.where(cond, then_v, else_v)
-                else:  # formula
-                    # Very limited safe eval: only round, abs, and existing columns
-                    allowed_funcs = {"round": round, "abs": abs, "np": np}
-                    # Build locals with column names
-                    local_env = {c: df_[c] for c in df_.columns}
-                    local_env.update(allowed_funcs)
-                    expr = s["expr"]
-                    out = pd.eval(expr, engine="python", local_dict=local_env)
-                if out is None:
-                    raise ValueError("Empty result")
-                df_[name] = out
+                        candidate_warmup_mae = float('inf')
+                    
+                    # Still get holdout predictions for final evaluation
+                    candidate_preds = candidate_results['predictions']
+                    if log_transform_y:
+                        candidate_preds = np.expm1(candidate_preds)
+                        candidate_preds = np.maximum(candidate_preds, 0)
+
+                    if np.isnan(candidate_warmup_mae):
+                        continue
+
+                    if best_warmup_mae is None or candidate_warmup_mae < best_warmup_mae:
+                        best_warmup_mae = candidate_warmup_mae
+                        best_lambda = candidate_lambda
+                        best_holdout_preds = candidate_preds
+                        best_rls_results = candidate_results
+
+                if best_rls_results is None:
+                    fallback_lambda = lambda_grid[0]
+                    best_lambda = fallback_lambda
+                    best_rls_results = apply_rls_on_holdout(
+                        trained_model=rls_init_model,
+                        X_train=X_train_final.values,
+                        y_train=y_train_final.values,
+                        X_warmup=X_warmup.values,
+                        y_warmup=y_warmup.values,
+                        X_holdout=X_holdout.values,
+                        y_holdout=y_holdout.values,
+                        feature_names=present_cols,
+                        forgetting_factor=fallback_lambda,
+                        nonnegative_features=positive_constraints,
+                        nonpositive_features=negative_constraints
+                    )
+                    best_holdout_preds = best_rls_results['predictions']
+                    if log_transform_y:
+                        best_holdout_preds = np.expm1(best_holdout_preds)
+                        best_holdout_preds = np.maximum(best_holdout_preds, 0)
+
+                rls_results = best_rls_results
+                holdout_preds = best_holdout_preds
+
+                # Get RLS metrics (retain MAE for comparisons, keep MAPE for result table)
+                r2_holdout = r2_score(y_holdout_original, holdout_preds)
+                mae_holdout = mean_absolute_error(y_holdout_original, holdout_preds)
+                mse_holdout = mean_squared_error(y_holdout_original, holdout_preds)
+                rmse_holdout = np.sqrt(mse_holdout)
+                mape_holdout = safe_mape(y_holdout_original, holdout_preds)
+
+                lambda_record = {k: v for k, v in zip(grouping_keys, gvals)}
+                lambda_record.update({
+                    "Model": display_name,
+                    "Best Lambda": best_lambda,
+                    "Holdout MAE": mae_holdout
+                })
+                optimized_lambda_records.append(lambda_record)
+                
+                # ═══════════════════════════════════════════════════════════════
+                # STATIC BASELINE: Train on weeks 1-48, predict 49-52
+                # ═══════════════════════════════════════════════════════════════
+                # Combine train + warmup for static model (weeks 1-48)
+                train_warmup_df = pd.concat([train_df, warmup_df], axis=0)
+                X_train_static = train_warmup_df[present_cols].fillna(0).copy()
+                y_train_static = train_warmup_df[target_col].copy()
+                
+                if log_transform_y:
+                    y_train_static = np.log1p(y_train_static)
+                
+                # Use same scaler (fitted on 1-44, but apply to 1-48)
+                if cols_to_scale_final:
+                    X_train_static[cols_to_scale_final] = sc_final.transform(X_train_static[cols_to_scale_final])
+                
+                # Train static model on full 48 weeks
+                static_model = clone(mdl)
+                
+                if isinstance(static_model, (CustomConstrainedRidge, ConstrainedLinearRegression)):
+                    static_model.fit(X_train_static.values, y_train_static.values, X_train_static.columns.tolist())
+                elif isinstance(static_model, StatsMixedEffectsModel):
+                    grp_col = static_model.group_col
+                    if grp_col in gdf.columns:
+                        groups_static = train_warmup_df[grp_col]
+                    else:
+                        groups_static = train_warmup_df[grouping_keys[0]]
+                    static_model.fit(X_train_static, y_train_static, groups_static)
+                else:
+                    static_model.fit(X_train_static, y_train_static)
+                
+                # Predict with frozen betas
+                baseline_static_preds = static_model.predict(
+                    X_holdout.values if hasattr(X_holdout, 'values') else X_holdout
+                )
+                
+                if log_transform_y:
+                    baseline_static_preds = np.expm1(baseline_static_preds)
+                    baseline_static_preds = np.maximum(baseline_static_preds, 0)
+                
+                # Calculate static metrics
+                r2_static = r2_score(y_holdout_original, baseline_static_preds)
+                mae_static = mean_absolute_error(y_holdout_original, baseline_static_preds)
+                rmse_static = np.sqrt(mean_squared_error(y_holdout_original, baseline_static_preds))
+                mape_static = safe_mape(y_holdout_original, baseline_static_preds)
+
+                # ═══════════════════════════════════════════════════════════════
+                # STORE WARMUP PREDICTIONS (NEW)
+                # ═══════════════════════════════════════════════════════════════
+                warmup_preds = rls_results.get('warmup_predictions', np.array([]))
+                warmup_actuals = rls_results.get('warmup_actuals', np.array([]))
+
+                if len(warmup_preds) > 0:
+                    # Reverse log transform on warmup predictions
+                    if log_transform_y:
+                        warmup_preds = np.expm1(warmup_preds)
+                        warmup_preds = np.maximum(warmup_preds, 0)
+                    
+                    # Store warmup predictions
+                    pr_warmup = warmup_df.copy()
+                    pr_warmup["Actual"] = warmup_actuals if not log_transform_y else np.expm1(warmup_actuals)
+                    pr_warmup["Predicted"] = warmup_preds
+                    pr_warmup["Model"] = display_name
+                    pr_warmup["Fold"] = "Warmup"
+                    preds_records.append(pr_warmup)
+
+                # ═══════════════════════════════════════════════════════════════
+                # STORE FOR COMPARISON VISUALIZATION
+                # ═══════════════════════════════════════════════════════════════
+                if 'rls_comparison_store' not in st.session_state:
+                    st.session_state.rls_comparison_store = []
+
+                st.session_state.rls_comparison_store.append({
+                    'Group': group_display_name,
+                    'Model': mname,
+                    'Dates': [f"Week {i+1}" for i in range(len(y_holdout_original))],
+                    'Actuals': y_holdout_original.values,
+                    'Predictions_Static': baseline_static_preds,
+                    'Predictions_RLS': holdout_preds,
+                    'R2_Static': r2_static,
+                    'R2_RLS': r2_holdout,
+                    'MAE_Static': mae_static,
+                    'MAE_RLS': mae_holdout,
+                    'RMSE_Static': rmse_static,
+                    'RMSE_RLS': rmse_holdout
+                })
+
+                # Store beta history
+                if 'beta_history' in rls_results:
+                    group_key = f"{group_display_name} | {mname} + RLS"
+                    
+                    if 'beta_history_store' not in st.session_state:
+                        st.session_state.beta_history_store = {}
+                    
+                    st.session_state.beta_history_store[group_key] = rls_results['beta_history']
+
+                # Create holdout row
+                if fold_results:
+                    cv_avg = aggregated[aggregated['Fold'] == 'Avg'].iloc[0].to_dict() if len(aggregated) > 0 else {}
+                    
+                    d = {k: v for k, v in zip(grouping_keys, gvals)}
+                    d.update({
+                        "Model": display_name,
+                        "Fold": "Holdout",
+                        "B0 (Original)": cv_avg.get("B0 (Original)", np.nan),
+                        "R2 Train": cv_avg.get("R2 Train", np.nan),
+                        "R2 Test": cv_avg.get("R2 Test", np.nan),
+                        "R2 Holdout": r2_holdout,
+                        "MAPE Train": cv_avg.get("MAPE Train", np.nan),
+                        "MAPE Test": cv_avg.get("MAPE Test", np.nan),
+                        "MAPE Holdout": mape_holdout,
+                        "MAE Train": cv_avg.get("MAE Train", np.nan),
+                        "MAE Test": cv_avg.get("MAE Test", np.nan),
+                        "MAE Holdout": mae_holdout,
+                        "MSE Train": cv_avg.get("MSE Train", np.nan),
+                        "MSE Test": cv_avg.get("MSE Test", np.nan),
+                        "MSE Holdout": mse_holdout,
+                        "RMSE Train": cv_avg.get("RMSE Train", np.nan),
+                        "RMSE Test": cv_avg.get("RMSE Test", np.nan),
+                        "RMSE Holdout": rmse_holdout,
+                    })
+                    
+                    # Add mean X from training
+                    mean_x = train_df[present_cols].mean(numeric_only=True).to_dict()
+                    for c, v in mean_x.items():
+                        d[c] = v
+                    
+                    # Add final betas (FIXED - use holdout_beta_snapshots)
+                    if 'beta_history' in rls_results:
+                        holdout_snapshots = rls_results['beta_history'].get('holdout_beta_snapshots', [])
+                        if len(holdout_snapshots) > 0:
+                            final_beta = holdout_snapshots[-1]
+                            
+                            for i, col in enumerate(present_cols):
+                                beta_val = final_beta[i+1] if i+1 < len(final_beta) else 0
+                                if col in scaler_final:
+                                    mu, sd = scaler_final[col]
+                                    beta_val = beta_val / sd
+                                d[f"Beta_{col}"] = beta_val
+                    
+                    rows.append(pd.DataFrame([d]))
+                    
+                    # Store holdout predictions
+                    pr = holdout_df.copy()
+                    pr["Actual"] = y_holdout_original.values
+                    pr["Predicted"] = holdout_preds
+                    pr["Model"] = display_name
+                    pr["Fold"] = "Holdout"
+                    preds_records.append(pr)
+
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # PROCESS STACKED MODELS (grouped by FILTER keys only, interaction on STACKING keys)
+    # ═════════════════════════════════════════════════════════════════════════
+    for gvals, gdf in group_list_stacked:
+        gvals = (gvals,) if not isinstance(gvals, tuple) else gvals
+        group_display_name = " | ".join([f"{k}={v}" for k, v in zip(filter_keys_for_stacking, gvals)]) if filter_keys_for_stacking else "All"
+        
+        present_cols = [c for c in X_columns if c in gdf.columns]
+        if len(present_cols) < len(X_columns):
+            for mname in stacked_models.keys():
+                for fold in range(k_folds):
+                    update_progress(group_display_name, mname, fold + 1)
+            continue
+        
+        X_full = gdf[present_cols].fillna(0).copy()
+        y_full = gdf[target_col].copy()
+        
+        n_samples = len(X_full)
+        n_features = len(present_cols)
+        
+        # Count number of unique groups in stacking keys
+        if stacked_models:
+            first_stacked_model = list(stacked_models.values())[0]
+            n_groups = gdf[first_stacked_model.group_keys].drop_duplicates().shape[0]
+            # Each group needs enough samples
+            min_samples_per_group = max(3, n_features // 2)
+            min_samples_needed = max(k_folds, n_groups * min_samples_per_group)
+        else:
+            min_samples_needed = max(k_folds, n_features * 2)
+        
+        if n_samples < min_samples_needed:
+            st.warning(f"⚠️ Skipping stacked model for {group_display_name}: Only {n_samples} samples but need {min_samples_needed}")
+            for mname in stacked_models.keys():
+                for fold in range(k_folds):
+                    update_progress(group_display_name, mname, fold + 1)
+            continue
+        
+        # ADAPTIVE K-FOLD: Reduce folds for smaller groups
+        adaptive_k = k_folds
+        if n_samples < 30:
+            adaptive_k = 2  # Use 2-fold for very small groups (stacked needs more samples)
+        elif n_samples < 60:
+            adaptive_k = min(3, k_folds)  # Use 3-fold for small groups
+        
+        kf = KFold(n_splits=adaptive_k, shuffle=True, random_state=42)
+        
+        if adaptive_k != k_folds:
+            st.info(f"ℹ️ {group_display_name} (stacked): Using {adaptive_k}-fold CV (only {n_samples} samples)")
+        
+        for mname, mdl in stacked_models.items():
+            fold_results = []
+            
+            for fold_id, (tr_idx, te_idx) in enumerate(kf.split(X_full, y_full), 1):
+                update_progress(group_display_name, mname, fold_id)
+                
+                # CRITICAL FIX: Use .iloc to get by position, keep track of original indices
+                # tr_idx and te_idx are POSITIONS in X_full
+                X_tr_orig = X_full.iloc[tr_idx].copy()
+                X_te_orig = X_full.iloc[te_idx].copy()
+                y_tr_orig = y_full.iloc[tr_idx].copy()
+                y_te_orig = y_full.iloc[te_idx].copy()
+                
+                # Store ORIGINAL y values for metrics calculation (before any transformation)
+                y_tr_original_scale = y_tr_orig.copy()
+                y_te_original_scale = y_te_orig.copy()
+                
+                # Apply log transformation if requested
+                if log_transform_y:
+                    y_tr_orig = np.log1p(y_tr_orig)  # log(1 + y)
+                    y_te_orig = np.log1p(y_te_orig)
+                
+                # Store original indices for later use
+                tr_index_map = X_tr_orig.index.tolist()
+                te_index_map = X_te_orig.index.tolist()
+                
+                # Get groups using the SAME POSITIONAL indices
+                # This ensures perfect alignment: row i of groups corresponds to row i of X
+                groups_tr = gdf.iloc[tr_idx][mdl.group_keys].copy()
+                groups_te = gdf.iloc[te_idx][mdl.group_keys].copy()
+                
+                # Standardization BEFORE resetting indices
+                scaler = {}
+                # Check if base model of stacked model is RLS
+                is_rls_base = isinstance(mdl.base_model, RecursiveLeastSquares) if hasattr(mdl, 'base_model') else False
+                
+                # RLS ALWAYS needs ALL features standardized
+                if is_rls_base:
+                    cols_to_scale = list(X_tr_orig.columns)
+                elif std_cols:
+                    cols_to_scale = [c for c in std_cols if c in X_tr_orig.columns]
+                else:
+                    cols_to_scale = []
+                
+                if cols_to_scale:
+                        sc = StandardScaler().fit(X_tr_orig[cols_to_scale])
+                        X_tr_orig[cols_to_scale] = sc.transform(X_tr_orig[cols_to_scale])
+                        X_te_orig[cols_to_scale] = sc.transform(X_te_orig[cols_to_scale])
+                        scaler = {c: (m, s) for c, m, s in zip(cols_to_scale, sc.mean_, sc.scale_)}
+                
+                # NOW reset all indices in perfect synchronization
+                X_tr_reset = X_tr_orig.reset_index(drop=True)
+                X_te_reset = X_te_orig.reset_index(drop=True)
+                y_tr_reset = y_tr_orig.reset_index(drop=True)
+                y_te_reset = y_te_orig.reset_index(drop=True)
+                y_tr_original_scale_reset = y_tr_original_scale.reset_index(drop=True)
+                y_te_original_scale_reset = y_te_original_scale.reset_index(drop=True)
+                groups_tr = groups_tr.reset_index(drop=True)
+                groups_te = groups_te.reset_index(drop=True)
+                
+                model_copy = clone(mdl)
+                model_copy.fit(X_tr_reset, y_tr_reset, feature_names=present_cols, groups_df=groups_tr)
+                
+                y_tr_pred = model_copy.predict(X_tr_reset, groups_df=groups_tr)
+                y_te_pred = model_copy.predict(X_te_reset, groups_df=groups_te)
+                
+                # Reverse transform predictions if log was applied
+                if log_transform_y:
+                    y_tr_pred = np.expm1(y_tr_pred)  # exp(pred) - 1
+                    y_te_pred = np.expm1(y_te_pred)
+                    # Ensure non-negative predictions
+                    y_tr_pred = np.maximum(y_tr_pred, 0)
+                    y_te_pred = np.maximum(y_te_pred, 0)
+                
+                # Get group coefficients
+                group_coefs = model_copy.get_group_coefficients()
+                
+                # Create result rows for each stacking group
+                if len(mdl.group_keys) == 1:
+                    test_groups = groups_te[mdl.group_keys[0]].astype(str)
+                    train_groups = groups_tr[mdl.group_keys[0]].astype(str)
+                else:
+                    test_groups = groups_te[mdl.group_keys].astype(str).apply(lambda row: "_".join(row), axis=1)
+                    train_groups = groups_tr[mdl.group_keys].astype(str).apply(lambda row: "_".join(row), axis=1)
+                
+                unique_test_groups = test_groups.unique()
+                
+                for group in unique_test_groups:
+                    group_mask_te = (test_groups == group).values
+                    
+                    if not group_mask_te.any():
+                        continue
+                    
+                    # Get original scale y values for this group
+                    y_te_group_original = y_te_original_scale_reset[group_mask_te]
+                    y_pred_te_group = y_te_pred[group_mask_te]
+                    
+                    # Metrics on original scale
+                    r2_te = r2_score(y_te_group_original, y_pred_te_group) if len(y_te_group_original) > 1 else np.nan
+                    mape_te = safe_mape(y_te_group_original, y_pred_te_group)
+                    mae_te = np.mean(np.abs(y_te_group_original - y_pred_te_group))
+                    mse_te = np.mean((y_te_group_original - y_pred_te_group)**2)
+                    rmse_te = np.sqrt(mse_te)
+                    
+                    group_mask_tr = (train_groups == group).values
+                    
+                    if group_mask_tr.any():
+                        y_tr_group_original = y_tr_original_scale_reset[group_mask_tr]
+                        y_pred_tr_group = y_tr_pred[group_mask_tr]
+                        r2_tr = r2_score(y_tr_group_original, y_pred_tr_group) if len(y_tr_group_original) > 1 else np.nan
+                        mape_tr = safe_mape(y_tr_group_original, y_pred_tr_group)
+                        mae_tr = np.mean(np.abs(y_tr_group_original - y_pred_tr_group))
+                        mse_tr = np.mean((y_tr_group_original - y_pred_tr_group)**2)
+                        rmse_tr = np.sqrt(mse_tr)
+                    else:
+                        r2_tr = mape_tr = mae_tr = mse_tr = rmse_tr = np.nan
+                    
+                    if group in group_coefs:
+                        raw_int = group_coefs[group]['intercept']
+                        raw_coefs_dict = group_coefs[group]['coefficients']
+                        
+                        # Reverse standardization
+                        if scaler and std_cols:
+                            for col in std_cols:
+                                if col in raw_coefs_dict and col in scaler:
+                                    mu, sd = scaler[col]
+                                    raw_coefs_dict[col] = raw_coefs_dict[col] / sd
+                                    raw_int -= raw_coefs_dict[col] * mu
+                        
+                        # FIX: Calculate mean X ONLY from TRAINING data to avoid leakage
+                        if group_mask_tr.any():
+                            train_indices_for_group = np.where(group_mask_tr)[0]
+                            train_original_indices = [tr_index_map[i] for i in train_indices_for_group]
+                            group_train_data = gdf.loc[train_original_indices]
+                            mean_x = group_train_data[present_cols].mean(numeric_only=True).to_dict()
+                        else:
+                            # Fallback if group not in training (shouldn't happen in CV)
+                            mean_x = {c: np.nan for c in present_cols}
+                        
+                        # Create fold result
+                        group_parts = group.split('_')
+                        d = {}
+                        
+                        # Add filter grouping keys
+                        for idx, key in enumerate(filter_keys_for_stacking):
+                            d[key] = gvals[idx]
+                        
+                        # Add stacking keys
+                        for idx, key in enumerate(mdl.group_keys):
+                            d[key] = group_parts[idx] if idx < len(group_parts) else ''
+                        
+                        d.update({
+                            "Model": mname,
+                            "Fold": fold_id,
+                            "B0 (Original)": raw_int,
+                            "R2 Train": r2_tr,
+                            "R2 Test": r2_te,
+                            "MAPE Train": mape_tr,
+                            "MAPE Test": mape_te,
+                            "MAE Train": mae_tr,
+                            "MAE Test": mae_te,
+                            "MSE Train": mse_tr,
+                            "MSE Test": mse_te,
+                            "RMSE Train": rmse_tr,
+                            "RMSE Test": rmse_te,
+                        })
+                        
+                        # Add mean X
+                        for c, v in mean_x.items():
+                            d[c] = v
+                        
+                        # Add betas
+                        for feat_name in present_cols:
+                            d[f"Beta_{feat_name}"] = raw_coefs_dict.get(feat_name, 0)
+                        
+                        fold_results.append(d)
+                        
+                        # FIX: Store predictions with consistent indices (original scale)
+                        test_indices_for_group = np.where(group_mask_te)[0]
+                        test_original_indices = [te_index_map[i] for i in test_indices_for_group]
+                        pr = gdf.loc[test_original_indices].copy()
+                        pr["Actual"] = y_te_group_original.values
+                        pr["Predicted"] = y_pred_te_group
+                        pr["Model"] = mname
+                        pr["Fold"] = fold_id
+                        preds_records.append(pr)
+            
+            # Report fold results: individual folds + aggregated
+            if fold_results:
+                fold_df = pd.DataFrame(fold_results)
+                
+                # Add individual fold rows
+                rows.append(fold_df)
+                
+                # Create aggregated row (average across folds)
+                # Identify keys
+                key_cols = [col for col in fold_df.columns if col in (filter_keys_for_stacking + mdl.group_keys) or col == 'Model']
+                
+                # Numeric columns to average
+                numeric_cols = fold_df.select_dtypes(include=[np.number]).columns.tolist()
+                numeric_cols = [col for col in numeric_cols if col != 'Fold']
+                
+                # String columns to take first
+                string_cols = [col for col in fold_df.columns if col not in numeric_cols and col not in key_cols and col != 'Fold']
+                
+                # Aggregate
+                agg_dict = {}
+                for col in numeric_cols:
+                    agg_dict[col] = 'mean'
+                for col in string_cols:
+                    agg_dict[col] = 'first'
+                
+                aggregated = fold_df.groupby(key_cols).agg(agg_dict).reset_index()
+                aggregated['Fold'] = 'Avg'  # Mark as average row
+                rows.append(aggregated)
+    
+    # Clear progress
+    progress_bar.empty()
+    status_text.empty()
+    
+    total_time = time.time() - start_time
+    st.success(f"✅ Completed in {total_time:.1f} seconds")
+    
+    if not rows:
+        return None, None, None
+    
+    # Combine results
+    results_df = pd.concat(rows, ignore_index=True)
+    
+    # Order columns (include Fold right after Model)
+    front = grouping_keys + ["Model", "Fold"]
+    metric_block = ["B0 (Original)", 
+                    "R2 Train", "R2 Test", "R2 Holdout",
+                    "MAPE Train", "MAPE Test", "MAPE Holdout",
+                    "MAE Train", "MAE Test", "MAE Holdout",
+                    "MSE Train", "MSE Test", "MSE Holdout",
+                    "RMSE Train", "RMSE Test", "RMSE Holdout"]
+
+    mean_x_cols = [c for c in results_df.columns if c not in front + metric_block and not c.startswith("Beta_") and not c.startswith("Mean_")]
+    beta_cols = [c for c in results_df.columns if c.startswith("Beta_")]
+    mean_cols = [c for c in results_df.columns if c.startswith("Mean_")]
+    
+    existing_cols = []
+    for col_group in [front, metric_block, mean_cols, beta_cols, mean_x_cols]:
+        existing_cols.extend([c for c in col_group if c in results_df.columns])
+    
+    # Ensure we include any remaining columns
+    for col in results_df.columns:
+        if col not in existing_cols:
+            existing_cols.append(col)
+    
+    results_df = results_df[existing_cols]
+    
+    preds_df = pd.concat(preds_records, ignore_index=True) if preds_records else None
+    optimized_lambda_df = pd.DataFrame(optimized_lambda_records) if optimized_lambda_records else None
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # ENSEMBLE MODEL CREATION (if enabled)
+    # ═══════════════════════════════════════════════════════════════════════════
+    ensemble_df = None
+    if enable_ensemble:
+        st.info("🔄 Creating ensemble models from CV results (averaging coefficients across all models)...")
+        
+        ensembles = create_ensemble_model_from_results(
+            results_df, 
+            grouping_keys, 
+            X_columns,
+            weight_metric=ensemble_weight_metric,
+            filter_r2_min=ensemble_filter_r2_min,
+            filter_mape_max=ensemble_filter_mape_max,
+            filter_mae_max=ensemble_filter_mae_max,
+            filter_positive_features=ensemble_filter_positive_features,
+            filter_negative_features=ensemble_filter_negative_features
+        )
+        
+        if ensembles:
+            # Convert ensemble dict to DataFrame
+            ensemble_rows = []
+            for combo_key, ensemble_data in ensembles.items():
+                row = {}
+                
+                # Parse combination key back to individual keys
+                if grouping_keys and " | " in combo_key:
+                    parts = combo_key.split(" | ")
+                    for part in parts:
+                        if "=" in part:
+                            k, v = part.split("=", 1)
+                            row[k] = v
+                elif grouping_keys and len(grouping_keys) == 1:
+                    row[grouping_keys[0]] = combo_key.split("=")[1] if "=" in combo_key else combo_key
+                
+                row['Model'] = 'Weighted Ensemble'
+                row['Fold'] = 'Ensemble'
+                row['B0 (Original)'] = ensemble_data['ensemble_intercept']
+                
+                # Add ensemble betas
+                for beta_name, beta_value in ensemble_data['ensemble_betas'].items():
+                    row[beta_name] = beta_value
+                
+                # Add ensemble metrics
+                for metric_key, metric_value in ensemble_data.items():
+                    if metric_key.startswith('ensemble_'):
+                        # Convert ensemble_r2_test -> R2 Test format
+                        metric_name = metric_key.replace('ensemble_', '').replace('_', ' ').title()
+                        row[metric_name] = metric_value
+                
+                # Add metadata
+                row['Num_Models'] = ensemble_data['num_models']
+                row['Best_Model'] = ensemble_data['model_names'][ensemble_data['best_model_idx']] if ensemble_data['model_names'] else ''
+                row['Weight_Concentration'] = ensemble_data['weight_concentration']
+                
+                ensemble_rows.append(row)
+            
+            ensemble_df = pd.DataFrame(ensemble_rows)
+            
+            # Append ensemble results to main results
+            results_df = pd.concat([results_df, ensemble_df], ignore_index=True)
+            
+            st.success(f"✅ Created {len(ensembles)} ensemble models")
+            
+            # ═══════════════════════════════════════════════════════════════════════════
+            # RLS ON ENSEMBLE MODELS (if both ensemble and RLS are enabled)
+            # Uses ensemble betas from weeks 1-44 → warmup 45-48 → test 49-52
+            # ═══════════════════════════════════════════════════════════════════════════
+            if enable_rls and holdout_weeks > 0:
+                st.info(f"🔄 Applying RLS to ensemble models: Train weeks 1-{44 if warmup_weeks == 4 else 'N-H-W'} → Warmup → Holdout test...")
+                
+                ensemble_rls_rows = []
+                
+                # Create expander for debug messages
+                debug_expander = st.expander(f"📋 RLS Processing Details ({len(ensembles)} ensemble(s))", expanded=False)
+                
+                for combo_key, ensemble_data in ensembles.items():
+                    debug_expander.caption(f"🔄 Processing: {combo_key}")
+                    # Get the original data for this combination
+                    if not grouping_keys or combo_key == 'ALL':
+                        gdf = df.copy()
+                        group_display_name = "All"
+                    else:
+                        # Parse combo_key to filter data
+                        if " | " in combo_key:
+                            parts = combo_key.split(" | ")
+                            filters = {}
+                            for part in parts:
+                                if "=" in part:
+                                    k, v = part.split("=", 1)
+                                    filters[k] = v
+                            
+                            gdf = df.copy()
+                            for k, v in filters.items():
+                                if k in gdf.columns:
+                                    gdf = gdf[gdf[k].astype(str) == str(v)]
+                            group_display_name = combo_key
+                        elif "=" in combo_key:
+                            # Single key case: "Brand=A"
+                            k, v = combo_key.split("=", 1)
+                            gdf = df.copy()
+                            if k in gdf.columns:
+                                gdf = gdf[gdf[k].astype(str) == str(v)]
+                            group_display_name = combo_key
+                        else:
+                            # Fallback: use entire dataset
+                            gdf = df.copy()
+                            group_display_name = combo_key
+                    
+                    if len(gdf) == 0:
+                        continue
+                    
+                    # Sort by index (assuming time order)
+                    gdf_sorted = gdf.sort_index()
+                    n_total = len(gdf_sorted)
+                    
+                    # Split: train (1-44), warmup (45-48), holdout (49-52)
+                    n_train = n_total - holdout_weeks - warmup_weeks
+                    n_warmup_end = n_total - holdout_weeks
+                    
+                    debug_expander.caption(f"  → Total={n_total}, Train={n_train}, Warmup={n_warmup_end-n_train}, Holdout={holdout_weeks}")
+                    
+                    if n_train < 10:
+                        debug_expander.warning(f"  ⚠️ Skipped {combo_key}: Not enough training data (need ≥10, have {n_train})")
+                        continue
+                    
+                    train_df = gdf_sorted.iloc[:n_train]
+                    warmup_df = gdf_sorted.iloc[n_train:n_warmup_end]
+                    holdout_df = gdf_sorted.iloc[n_warmup_end:]
+                    
+                    # Prepare data
+                    present_cols = [c for c in X_columns if c in gdf_sorted.columns]
+                    if len(present_cols) < len(X_columns):
+                        continue
+                    
+                    X_train = train_df[present_cols].fillna(0).values
+                    y_train = train_df[target_col].values
+                    y_train_original = y_train.copy()
+                    
+                    X_warmup = warmup_df[present_cols].fillna(0).values
+                    y_warmup = warmup_df[target_col].values
+                    y_warmup_original = y_warmup.copy()
+                    
+                    X_holdout = holdout_df[present_cols].fillna(0).values
+                    y_holdout = holdout_df[target_col].values
+                    y_holdout_original = y_holdout.copy()
+                    
+                    if log_transform_y:
+                        y_train = np.log1p(y_train)
+                        y_warmup = np.log1p(y_warmup)
+                        y_holdout = np.log1p(y_holdout)
+                    
+                    # Standardization (RLS needs ALL features standardized)
+                    sc = StandardScaler().fit(X_train)
+                    X_train = sc.transform(X_train)
+                    X_warmup = sc.transform(X_warmup)
+                    X_holdout = sc.transform(X_holdout)
+                    
+                    # Extract ensemble betas (already in original feature names format: Beta_<feature>)
+                    ensemble_betas_dict = ensemble_data['ensemble_betas']
+                    ensemble_intercept = ensemble_data['ensemble_intercept']
+                    
+                    # Convert to array in correct order
+                    ensemble_beta_array = np.array([
+                        ensemble_betas_dict.get(f"Beta_{feat}", 0.0) 
+                        for feat in present_cols
+                    ])
+                    
+                    # CRITICAL FIX: Transform ensemble betas from original scale to standardized scale
+                    # Since X data is standardized, we need to adjust the betas accordingly
+                    # For standardized data: beta_std = beta_orig / sd
+                    # And intercept_std = intercept_orig - sum(beta_orig * mean / sd)
+                    standardized_beta_array = ensemble_beta_array / sc.scale_
+                    standardized_intercept = ensemble_intercept - np.sum(ensemble_beta_array * sc.mean_ / sc.scale_)
+                    
+                    # Apply RLS with ensemble betas as initialization
+                    lambda_grid = rls_lambda_candidates if rls_lambda_candidates is not None else DEFAULT_RLS_LAMBDA_GRID
+                    best_lambda = None
+                    best_holdout_preds = None
+                    best_mae = None
+                    best_rls_results = None
+                    
+                    for candidate_lambda in lambda_grid:
+                        rls_results = apply_rls_on_holdout(
+                            trained_model=None,  # Will use initial_beta/initial_intercept instead
+                            X_train=X_train,
+                            y_train=y_train,
+                            X_warmup=X_warmup,
+                            y_warmup=y_warmup,
+                            X_holdout=X_holdout,
+                            y_holdout=y_holdout,
+                            feature_names=present_cols,
+                            forgetting_factor=candidate_lambda,
+                            nonnegative_features=positive_constraints,
+                            nonpositive_features=negative_constraints,
+                            initial_beta=standardized_beta_array,  # Use standardized ensemble betas!
+                            initial_intercept=standardized_intercept  # Use standardized ensemble intercept!
+                        )
+                        
+                        candidate_preds = rls_results['predictions']
+                        if log_transform_y:
+                            candidate_preds = np.expm1(candidate_preds)
+                            # Check for negative predictions before clipping
+                            n_negative = np.sum(candidate_preds < 0)
+                            if n_negative > 0:
+                                debug_expander.warning(f"  ⚠️ {n_negative}/{len(candidate_preds)} RLS predictions were negative (clipped to 0)")
+                            candidate_preds = np.maximum(candidate_preds, 0)
+                        
+                        # CRITICAL FIX: Use WARMUP MAE for lambda selection to avoid data leakage
+                        warmup_preds = rls_results.get('warmup_predictions', np.array([]))
+                        if len(warmup_preds) > 0:
+                            if log_transform_y:
+                                warmup_preds_transformed = np.expm1(warmup_preds)
+                                warmup_preds_transformed = np.maximum(warmup_preds_transformed, 0)
+                            else:
+                                warmup_preds_transformed = warmup_preds
+                            candidate_warmup_mae = mean_absolute_error(y_warmup_original, warmup_preds_transformed)
+                        else:
+                            candidate_warmup_mae = float('inf')
+                        
+                        if np.isnan(candidate_warmup_mae):
+                            continue
+                        
+                        if best_mae is None or candidate_warmup_mae < best_mae:
+                            best_mae = candidate_warmup_mae
+                            best_lambda = candidate_lambda
+                            best_holdout_preds = candidate_preds
+                            best_rls_results = rls_results
+                    
+                    if best_rls_results is None:
+                        debug_expander.warning(f"  ⚠️ RLS failed for {combo_key}: No valid lambda found")
+                        continue
+                    
+                    debug_expander.caption(f"  ✅ RLS successful! Best lambda={best_lambda:.3f}")
+                    
+                    # Calculate metrics
+                    r2_holdout = r2_score(y_holdout_original, best_holdout_preds)
+                    mape_holdout = safe_mape(y_holdout_original, best_holdout_preds)
+                    rmse_holdout = np.sqrt(mean_squared_error(y_holdout_original, best_holdout_preds))
+                    
+                    # Create ensemble + RLS row
+                    row = {}
+                    if grouping_keys and " | " in combo_key:
+                        parts = combo_key.split(" | ")
+                        for part in parts:
+                            if "=" in part:
+                                k, v = part.split("=", 1)
+                                row[k] = v
+                    
+                    row['Model'] = 'Weighted Ensemble + RLS'
+                    row['Fold'] = 'Holdout'
+                    row['R2 Holdout'] = r2_holdout
+                    row['MAPE Holdout'] = mape_holdout
+                    row['MAE Holdout'] = best_mae
+                    row['RMSE Holdout'] = rmse_holdout
+                    row['Best_Lambda'] = best_lambda
+                    
+                    # Add final betas from RLS
+                    if 'beta_history' in best_rls_results:
+                        holdout_snapshots = best_rls_results['beta_history'].get('holdout_beta_snapshots', [])
+                        if len(holdout_snapshots) > 0:
+                            final_beta = holdout_snapshots[-1]
+                            row['B0 (Original)'] = final_beta[0]
+                            for i, feat in enumerate(present_cols):
+                                # Reverse standardization
+                                beta_val = final_beta[i+1]
+                                beta_val = beta_val / sc.scale_[i]
+                                row[f"Beta_{feat}"] = beta_val
+                    
+                    ensemble_rls_rows.append(row)
+                    
+                    # ═══════════════════════════════════════════════════════════════
+                    # STORE WARMUP PREDICTIONS
+                    # ═══════════════════════════════════════════════════════════════
+                    warmup_preds = best_rls_results.get('warmup_predictions', np.array([]))
+                    warmup_actuals = best_rls_results.get('warmup_actuals', np.array([]))
+                    
+                    if len(warmup_preds) > 0:
+                        # Reverse log transform on warmup predictions
+                        if log_transform_y:
+                            warmup_preds = np.expm1(warmup_preds)
+                            warmup_preds = np.maximum(warmup_preds, 0)
+                            warmup_actuals = np.expm1(warmup_actuals)
+                        
+                        # Store warmup predictions
+                        pr_warmup = warmup_df.copy()
+                        pr_warmup["Actual"] = warmup_actuals
+                        pr_warmup["Predicted"] = warmup_preds
+                        pr_warmup["Model"] = 'Weighted Ensemble + RLS'
+                        pr_warmup["Fold"] = "Warmup"
+                        preds_records.append(pr_warmup)
+                    
+                    # Store holdout predictions
+                    pr = holdout_df.copy()
+                    pr["Actual"] = y_holdout_original
+                    pr["Predicted"] = best_holdout_preds
+                    pr["Model"] = 'Weighted Ensemble + RLS'
+                    pr["Fold"] = "Holdout"
+                    preds_records.append(pr)
+                    
+                    # Store lambda
+                    lambda_record = {}
+                    if grouping_keys and " | " in combo_key:
+                        parts = combo_key.split(" | ")
+                        for part in parts:
+                            if "=" in part:
+                                k, v = part.split("=", 1)
+                                lambda_record[k] = v
+                    lambda_record['Model'] = 'Weighted Ensemble + RLS'
+                    lambda_record['Best Lambda'] = best_lambda
+                    lambda_record['Holdout MAE'] = best_mae
+                    optimized_lambda_records.append(lambda_record)
+                    
+                    # ═══════════════════════════════════════════════════════════════
+                    # CREATE STATIC BASELINE FOR COMPARISON (ensemble without RLS)
+                    # ═══════════════════════════════════════════════════════════════
+                    # Create static predictions using ensemble betas on train+warmup (weeks 1-48)
+                    train_warmup_data = pd.concat([train_df, warmup_df])
+                    X_train_warmup = train_warmup_data[present_cols].fillna(0).values
+                    y_train_warmup = train_warmup_data[target_col].values
+                    
+                    if log_transform_y:
+                        y_train_warmup = np.log1p(y_train_warmup)
+                    
+                    # Standardize with same scaler
+                    sc_trainwarmup = StandardScaler().fit(X_train_warmup)
+                    X_train_warmup_scaled = sc_trainwarmup.transform(X_train_warmup)
+                    X_holdout_scaled_trainwarmup = sc_trainwarmup.transform(X_holdout)
+                    
+                    # Static predictions using ensemble betas (no RLS adaptation)
+                    # Convert ensemble betas to standardized space
+                    ensemble_beta_array_trainwarmup = np.array([
+                        ensemble_betas_dict.get(f"Beta_{feat}", 0.0) * sc_trainwarmup.scale_[i]
+                        for i, feat in enumerate(present_cols)
+                    ])
+                    
+                    baseline_static_preds = (
+                        X_holdout_scaled_trainwarmup @ ensemble_beta_array_trainwarmup + 
+                        ensemble_intercept
+                    )
+                    
+                    if log_transform_y:
+                        baseline_static_preds = np.expm1(baseline_static_preds)
+                        # Check for negative predictions before clipping
+                        n_negative_static = np.sum(baseline_static_preds < 0)
+                        if n_negative_static > 0:
+                            debug_expander.warning(f"  ⚠️ {n_negative_static}/{len(baseline_static_preds)} Static predictions were negative (clipped to 0)")
+                        baseline_static_preds = np.maximum(baseline_static_preds, 0)
+                    
+                    # Calculate static metrics
+                    r2_static = r2_score(y_holdout_original, baseline_static_preds)
+                    mae_static = mean_absolute_error(y_holdout_original, baseline_static_preds)
+                    rmse_static = np.sqrt(mean_squared_error(y_holdout_original, baseline_static_preds))
+                    
+                    # ═══════════════════════════════════════════════════════════════
+                    # STORE FOR COMPARISON VISUALIZATION
+                    # ═══════════════════════════════════════════════════════════════
+                    debug_expander.caption(f"  💾 Storing comparison data for {group_display_name}")
+                    
+                    if 'rls_comparison_store' not in st.session_state:
+                        st.session_state.rls_comparison_store = []
+                    
+                    st.session_state.rls_comparison_store.append({
+                        'Group': group_display_name,
+                        'Model': 'Weighted Ensemble',
+                        'Dates': [f"Week {i+1}" for i in range(len(y_holdout_original))],
+                        'Actuals': y_holdout_original,
+                        'Predictions_Static': baseline_static_preds,
+                        'Predictions_RLS': best_holdout_preds,
+                        'R2_Static': r2_static,
+                        'R2_RLS': r2_holdout,
+                        'MAE_Static': mae_static,
+                        'MAE_RLS': best_mae,
+                        'RMSE_Static': rmse_static,
+                        'RMSE_RLS': rmse_holdout
+                    })
+                    
+                    # Store beta history
+                    if 'beta_history' in best_rls_results:
+                        group_key = f"{group_display_name} | Weighted Ensemble + RLS"
+                        
+                        if 'beta_history_store' not in st.session_state:
+                            st.session_state.beta_history_store = {}
+                        
+                        st.session_state.beta_history_store[group_key] = best_rls_results['beta_history']
+                
+                if ensemble_rls_rows:
+                    ensemble_rls_df = pd.DataFrame(ensemble_rls_rows)
+                    results_df = pd.concat([results_df, ensemble_rls_df], ignore_index=True)
+                    st.success(f"✅ Applied RLS to {len(ensemble_rls_rows)} ensemble models")
+    
+    return results_df, preds_df, optimized_lambda_df, ensemble_df
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# MAIN APP
+# ═══════════════════════════════════════════════════════════════════════════
+
+def main():
+    st.set_page_config(page_title="Modeling App", layout="wide")
+     
+    st.title("🎯 Regression Modeling App")
+    
+    # Initialize session state
+    if 'data' not in st.session_state:
+        st.session_state.data = None
+    if 'results' not in st.session_state:
+        st.session_state.results = None
+    
+    # Sidebar
+    with st.sidebar:
+        st.header("📁 Data Upload")
+        uploaded_file = st.file_uploader("Upload CSV or Excel", type=['csv', 'xlsx', 'xls'])
+        
+        if uploaded_file is not None:
+            try:
+                if uploaded_file.name.endswith('.csv'):
+                    df = pd.read_csv(uploaded_file)
+                else:
+                    df = pd.read_excel(uploaded_file)
+                
+                st.session_state.data = df
+                st.success(f"✅ {len(df)} rows × {len(df.columns)} cols")
             except Exception as e:
-                st.error(f"Failed to compute '{name}': {e}")
-            return df_
+                st.error(f"Error: {str(e)}")
+                return
+        
+        if st.session_state.data is not None:
+            st.markdown("---")
+            st.metric("Total Rows", len(st.session_state.data))
+            st.metric("Total Columns", len(st.session_state.data.columns))
+    
+    if st.session_state.data is None:
+        st.info("👆 Upload a file to begin")
+        return
 
-        # Apply all specs in order
-        for _s in st.session_state["sales_computed_specs"]:
-            gdf_comp = _apply_spec(gdf_comp, _s)
-
-        # Show a quick preview
-        if st.checkbox("Show preview with computed columns", value=False, key="sales_comp_preview"):
-            st_dataframe_safe(gdf_comp, n=150, use_container_width=True, height=320)
-
-    # Use the computed-working df going forward
-    work_df2 = gdf_comp if 'gdf_comp' in locals() and gdf_comp is not None else work_df
-    if work_df2 is None or work_df2.empty:
-        st.error("No working dataset available for aggregation.")
-        cols2 = []
-    else:
-        cols2 = list(map(str, work_df2.columns))
-
-    # ---------------- Multi-metric aggregation ----------------
     st.markdown("---")
-    st.markdown('<div class="section-header" style="background: linear-gradient(135deg, #FFBD59 0%, #FFCF87 100%); color: #333333;">🧮 **Multi-Metric Aggregation & Analysis**</div>', unsafe_allow_html=True)
+    
+    # Configuration
+    st.header("Configuration")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("1️⃣ Grouping Keys")
+        available_cols = list(df.columns)
+        selected_grouping_keys = st.multiselect(
+            "Select grouping columns:",
+            options=available_cols,
+            default=[],
+            help="Each unique combination gets its own model"
+        )
+        
+        if selected_grouping_keys:
+            combo_counts = df.groupby(selected_grouping_keys).size().reset_index(name='Count')
+            st.caption(f"📌 {len(combo_counts)} unique combinations")
+    
+    with col2:
+        st.subheader("2️⃣ Target & Predictors")
+        numeric_cols = list(df.select_dtypes(include=[np.number]).columns)
+        
+        target_col = st.selectbox(
+            "🎯 Target Variable:",
+            options=numeric_cols,
+            help="What to predict"
+        )
+        
+        available_predictors = [c for c in numeric_cols if c != target_col and c not in selected_grouping_keys]
+        default_predictors = st.session_state.get(
+            'selected_predictors',
+            available_predictors[:min(5, len(available_predictors))]
+        )
+        # Ensure defaults exist in current options
+        default_predictors = [p for p in default_predictors if p in available_predictors]
+        selected_predictors = st.multiselect(
+            "📊 Predictors:",
+            options=available_predictors,
+            default=default_predictors,
+            help="Features for the model"
+        )
+        st.session_state['selected_predictors'] = selected_predictors
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # RESIDUALIZATION FEATURE (Automatic per product/brand)
+    # ═══════════════════════════════════════════════════════════════════════════
+    residualization_mapping = {}
+    with st.expander("🔧 Advanced: Auto-Residualization (Remove Multicollinearity)", expanded=False):
+        st.markdown("""
+        **Automatically remove correlation** by finding product-specific primary variables.
+        
+        **How it works:**
+        - For each product (e.g., "paw diamond necklace"), finds its specific column (e.g., "paw diamond necklace_meta_impression")
+        - Uses that as primary variable for that product
+        - Residualizes all other predictors against it
+        - Falls back to a general column (e.g., "impressions") if product-specific column doesn't exist
+        """)
+        
+        enable_auto_residualization = st.checkbox(
+            "Enable Auto-Residualization",
+            value=False,
+            help="Automatically detect primary variable per product/brand and residualize others"
+        )
+        
+        # Clear residualisation state if checkbox is unchecked
+        if not enable_auto_residualization and st.session_state.get('residualization_applied', False):
+            st.session_state['residualization_applied'] = False
+            st.session_state.pop('df_residualized', None)
+            st.session_state.pop('selected_predictors_residualized', None)
+            st.session_state.pop('residualization_mapping', None)
+            st.info("🔄 Residualisation disabled - using original data")
+        
+        if enable_auto_residualization and selected_grouping_keys and len(selected_predictors) > 1:
+            # Identify fallback primary variable - prefer general "impressions" column if present
+            default_fallback = next(
+                (
+                    col for col in numeric_cols
+                    if col.lower().strip() == "impressions"
+                ),
+                None
+            )
+            fallback_primary = st.selectbox(
+                "📌 Fallback Primary Variable (if no product-specific column found):",
+                options=numeric_cols,
+                index=numeric_cols.index(default_fallback) if default_fallback and default_fallback in numeric_cols else 0,
+                help="Column to use when no product-specific match exists (defaults to 'impressions' when available)"
+            )
+            
+            # Auto-detect and show mapping
+            st.markdown("**🔍 Detected Primary Variables:**")
+            
+            # Get unique values from first grouping key
+            if selected_grouping_keys:
+                first_group_key = selected_grouping_keys[0]
+                unique_groups = df[first_group_key].unique()
+                
+                detected_mappings = {}
+                
+                # Candidate columns for impressions
+                def _normalize(text: str) -> str:
+                    text = text.lower().strip()
+                    text = text.replace('-', ' ')
+                    text = text.replace('/', ' ')
+                    text = text.replace('&', ' and ')
+                    text = text.replace("'", '')
+                    text = "".join(ch if ch.isalnum() or ch == ' ' else ' ' for ch in text)
+                    return "_".join(text.split())
+                
+                impression_cols = [
+                    col for col in numeric_cols
+                    if '_meta_impression' in col.lower()
+                ]
+                st.caption(f"**Matched {len(impression_cols)} impression column candidates**")
+                
+                for group_val in unique_groups:
+                    if pd.notna(group_val):
+                        group_key = str(group_val)
+                        group_norm = _normalize(group_key)
+                        
+                        # Try to find product-specific column
+                        primary_found = None
+                        best_match_score = 0
+                        
+                        for col in impression_cols:
+                            col_norm = _normalize(col.replace('_meta_impression', ''))
+                            if not col_norm:
+                                continue
+                            if col_norm == group_norm:
+                                primary_found = col
+                                best_match_score = len(group_norm)
+                                break
+                            if group_norm in col_norm or col_norm in group_norm:
+                                score = min(len(group_norm), len(col_norm))
+                                if score > best_match_score:
+                                    primary_found = col
+                                    best_match_score = score
+                        
+                        # Use fallback if not found (e.g., "impressions")
+                        if primary_found is None:
+                            primary_found = fallback_primary
+                        
+                        detected_mappings[group_key] = primary_found
+                
+                # Show detected mappings in table format
+                matched_count = sum(1 for v in detected_mappings.values() if v != fallback_primary)
+                st.caption(f"**Matched {matched_count} of {len(detected_mappings)} products to specific impression columns**")
+                
+                # Display mappings in a dataframe table instead of list
+                mapping_data = []
+                for group, primary in detected_mappings.items():
+                    status = "✅ Matched" if primary != fallback_primary else "⚠️ Fallback"
+                    mapping_data.append({
+                        'Product': group,
+                        'Primary Variable': primary,
+                        'Status': status
+                    })
+                
+                mapping_df = pd.DataFrame(mapping_data)
+                st.dataframe(mapping_df, use_container_width=True, height=400)
+                
+                # Apply residualization per group
+                if st.button("✅ Apply Auto-Residualization", key="apply_residualization"):
+                    df_residual = df.copy()
+                    residualization_stats = []
+                    
+                    for group_val, primary_var in detected_mappings.items():
+                        # Filter to this group
+                        group_mask = df_residual[first_group_key].astype(str) == str(group_val)
+                        group_df = df_residual[group_mask]
+                        
+                        if len(group_df) < 10:
+                            continue
+                        
+                        # Variables to residualize (all except primary and target)
+                        vars_to_residualize = [
+                            p for p in selected_predictors
+                            if p != primary_var and p != target_col
+                        ]
+                        
+                        for var in vars_to_residualize:
+                            if var in group_df.columns and primary_var in group_df.columns:
+                                valid_mask = group_df[[primary_var, var]].notna().all(axis=1)
+                                
+                                if valid_mask.sum() > 5:
+                                    X_primary = group_df.loc[valid_mask, primary_var].values.reshape(-1, 1)
+                                    y_secondary = group_df.loc[valid_mask, var].values
+                                    
+                                    # Fit regression
+                                    lr = LinearRegression()
+                                    lr.fit(X_primary, y_secondary)
+                                    
+                                    # Calculate residuals for this group
+                                    X_all = group_df[primary_var].fillna(0).values.reshape(-1, 1)
+                                    predicted = lr.predict(X_all)
+                                    residuals = group_df[var].fillna(0).values - predicted
+                                    
+                                    # Store in original dataframe with product-specific name
+                                    residual_col_name = f"{var}_residual"
+                                    df_residual.loc[group_mask, residual_col_name] = residuals
+                                    
+                                    residualization_stats.append({
+                                        'Group': group_val,
+                                        'Primary': primary_var,
+                                        'Residualized': var,
+                                        'New Column': residual_col_name,
+                                        'R²': lr.score(X_primary, y_secondary)
+                                    })
+                    
+                    if residualization_stats:
+                        # Store the residualised dataframe in session state
+                        st.session_state['df_residualized'] = df_residual
+                        
+                        # Update predictor list - replace original with residual versions
+                        residualized_var_names = set([s['Residualized'] for s in residualization_stats])
+                        
+                        # Remove original variables and add their residual versions
+                        new_selected_predictors = [p for p in selected_predictors 
+                                            if p not in residualized_var_names]
+                        
+                        # Add unique residual columns
+                        residual_cols = list(set([s['New Column'] for s in residualization_stats]))
+                        new_selected_predictors.extend(residual_cols)
+                        
+                        # Store both the new predictors and a flag in session state
+                        st.session_state['selected_predictors_residualized'] = new_selected_predictors
+                        st.session_state['residualization_applied'] = True
+                        st.session_state['residualization_mapping'] = residualization_mapping
+                        
+                        st.success(f"✅ Applied residualization to {len(residualized_var_names)} variable(s) across {len(detected_mappings)} groups")
+                        
+                        # Show detailed stats table
+                        stats_df = pd.DataFrame(residualization_stats)
+                        st.dataframe(stats_df, use_container_width=True, height=300)
 
-    # Define aggregation options first
-    agg_options = ["Sum", "Average (mean)", "Count (values)", "Count distinct", "Min", "Max", "Median"]
-    func_map = {
-        "Sum": "sum",
-        "Average (mean)": "mean",
-        "Count (values)": "count",
-        "Count distinct": "nunique",
-        "Min": "min",
-        "Max": "max",
-        "Median": "median",
+                        # Show residual counts per group
+                        group_counts = (
+                            stats_df.groupby('Group')['Residualized']
+                            .count()
+                            .reset_index()
+                            .rename(columns={'Residualized': 'Residualized Features'})
+                            .sort_values('Residualized Features', ascending=False)
+                        )
+                        st.caption("**Residualized features per product**")
+                        st.dataframe(group_counts, use_container_width=True, height=250)
+                        
+                        st.info(f"""
+                        **Next Steps:**
+                        - Created {len(residual_cols)} residual column(s)
+                        - Original variables replaced with their residualized versions
+                        - Constraints and standardization will now use residualized columns
+                        - Products with specific columns: Use their primary + residuals
+                        - Products using fallback ({fallback_primary}): All use same primary + residuals
+                        """)
+
+    # Check if residualization was applied and update data and predictors accordingly
+    if st.session_state.get('residualization_applied', False):
+        df_working = st.session_state.get('df_residualized', df)
+        selected_predictors_working = st.session_state.get('selected_predictors_residualized', selected_predictors)
+        
+        # Show a notice that we're using residualized data
+        st.success("📊 Using residualized data for all subsequent operations")
+    else:
+        df_working = df
+        selected_predictors_working = selected_predictors
+    
+    st.markdown("---")
+
+
+
+
+    
+    col3, col4 = st.columns(2)
+    
+    with col3:
+        st.subheader("3️⃣ Constraints")
+        positive_constraints = st.multiselect(
+            "Force ≥ 0:",
+            options=selected_predictors_working,
+            default=[],
+            help="Variables that must have positive coefficients"
+        )
+        
+        available_for_negative = [p for p in selected_predictors_working if p not in positive_constraints]
+        negative_constraints = st.multiselect(
+            "Force ≤ 0:",
+            options=available_for_negative,
+            default=[],
+            help="Variables that must have negative coefficients"
+        )
+    
+    with col4:
+        st.subheader("4️⃣ Model Settings")
+        k_folds = st.number_input(
+            "CV Folds:",
+            min_value=2,
+            max_value=20,
+            value=5
+        )
+        
+        standardize_cols = st.multiselect(
+            "Standardize:",
+            options=selected_predictors_working,
+            default=[]
+        )
+        
+        log_transform_y = st.checkbox(
+            "🔄 Log Transform Y Variable: log(y+1)",
+            value=False,
+            help="Apply log(y+1) transformation to target variable. Helps with:\n• Zero values in count data\n• Reducing impact of outliers\n• Stabilizing variance\n• Improving model fit for small discrete values"
+        )
+        
+        min_y_share_pct = st.number_input(
+            "Min Y Share % (Filter Groups):",
+            min_value=0.0,
+            max_value=10.0,
+            value=1.0,
+            step=0.1,
+            help="Only train models on groups where Y variable sum is at least this % of total Y.\n"
+                 "• Focuses on significant segments\n"
+                 "• Improves model quality by excluding tiny groups\n"
+                 "• Speeds up computation\n"
+                 "Example: 1% means group must contribute ≥1% of total Y"
+        )
+    
+    st.markdown("---")
+    
+    # Stacking configuration
+    use_stacked = st.checkbox(
+        "Enable Stacking (Group-Specific Coefficients)",
+        value=False,
+        help="Creates models with interaction terms for selected keys"
+    )
+    
+    if use_stacked and selected_grouping_keys:
+        st.info("📌 **Stacking Strategy:** Select which keys to filter by vs which to use for interactions")
+        
+        col_stack1, col_stack2 = st.columns(2)
+        
+        with col_stack1:
+            filter_keys_for_stacking = st.multiselect(
+                "🔍 Filter By (separate models):",
+                options=selected_grouping_keys,
+                default=[selected_grouping_keys[0]] if selected_grouping_keys else [],
+                help="Create separate models for each unique value of these keys"
+            )
+        
+        with col_stack2:
+            remaining_keys = [k for k in selected_grouping_keys if k not in filter_keys_for_stacking]
+            if remaining_keys:
+                st.multiselect(
+                    "🔄 Interaction Keys (within models):",
+                    options=remaining_keys,
+                    default=remaining_keys,
+                    disabled=True,
+                    help="These keys will create interaction terms within each filtered model"
+                )
+                stacking_keys = remaining_keys
+            else:
+                st.warning("⚠️ No keys left for interactions. Select fewer filter keys.")
+                stacking_keys = []
+    else:
+        filter_keys_for_stacking = []
+        stacking_keys = []
+    
+    st.markdown("---")
+    
+    # RLS Settings
+    with st.expander("🔄 Recursive Least Squares (RLS) Settings", expanded=False):
+        st.caption("RLS continuously updates model parameters as new data arrives")
+        
+        col_rls1, col_rls2 = st.columns(2)
+        
+        with col_rls1:
+            enable_rls = st.checkbox(
+                "Enable RLS",
+                value=False,
+                help="Recursive Least Squares with automated forgetting factor tuning"
+            )
+        
+        with col_rls2:
+            warmup_weeks = st.number_input(
+                "Warmup Weeks:",
+                min_value=0,
+                max_value=20,
+                value=4,
+                step=1,
+                help="Weeks for RLS to adapt before holdout testing. RLS updates on these weeks without scoring."
+            )
+        
+        holdout_weeks = st.number_input(
+            "Holdout Weeks for Testing:",
+            min_value=1,
+            max_value=20,
+            value=4,
+            step=1,
+            help="Number of recent weeks to hold out for testing RLS vs static predictions"
+        )
+        
+        st.caption("📋 Forgetting factor is selected automatically per model to minimize holdout MAE.")
+        st.caption(f"📋 Split: Train on weeks 1-{f'N-{holdout_weeks}-{warmup_weeks}' if warmup_weeks > 0 else f'N-{holdout_weeks}'}, "
+                f"warmup on weeks {f'N-{holdout_weeks}-{warmup_weeks}+1 to N-{holdout_weeks}' if warmup_weeks > 0 else 'none'}, "
+                f"test on last {holdout_weeks} weeks")
+
+    
+    st.markdown("---")
+    
+    # Model selection
+    st.subheader("5️⃣ Select Models")
+    
+    base_models = {
+        "Linear Regression": LinearRegression(),
+        "Ridge Regression": Ridge(alpha=1.0),
+        "Lasso Regression": Lasso(alpha=0.1),
+        "ElasticNet Regression": ElasticNet(alpha=0.1, l1_ratio=0.5),
+        "Bayesian Ridge": BayesianRidge(),
+        "Custom Constrained Ridge": CustomConstrainedRidge(
+            l2_penalty=0.1,
+            learning_rate=0.001,
+            iterations=10000,
+            non_negative_features=positive_constraints,
+            non_positive_features=negative_constraints
+        ),
+        "Constrained Linear Regression": ConstrainedLinearRegression(
+            learning_rate=0.001,
+            iterations=10000,
+            non_negative_features=positive_constraints,
+            non_positive_features=negative_constraints
+        )
     }
     
-    # Better organized UI with columns
-    agg_col1, agg_col2 = st.columns([1, 1])
+    col_models = st.columns(4)
+    selected_models = []
     
-    with agg_col1:
-        # 2) Choose group-by columns
-        st.markdown("**📊 Group By Columns**")
-        group_by_cols = st.multiselect(
-            "Select columns to group by:",
-            options=cols2,
-            key="sales_tab_group_cols2",
-            help="Select multiple columns to create hierarchical groupings"
-        )
-        
-        # 3) Choose one or more sales fields + per-field aggregation
-        if not cols2:
-            st.warning("No columns available for selection.")
-            sales_fields = []
-        else:
-            # Default guess: common names or first 1–3 numeric columns
-            if work_df2 is not None and not work_df2.empty:
-                num_cols2 = work_df2.select_dtypes(include="number").columns.tolist()
-            else:
-                num_cols2 = []
-                
-            common_sales_names = {
-                "sales","sale","amount","revenue","qty","quantity","value",
-                "price","mrp","net_amount","netamount","gross_amount","netvalue","invoice_amount","bill_amount"
-            }
-            default_measures = [c for c in cols2 if c.lower() in common_sales_names]
-            if not default_measures:
-                default_measures = num_cols2[:3] if num_cols2 else (cols2[:1] if cols2 else [])
-
-            sales_fields = st.multiselect(
-                "📈 Metrics (select one or many):",
-                options=cols2,
-                default=default_measures,
-                key="sales_tab_measures"
-            )
+    for idx, model_name in enumerate(base_models.keys()):
+        with col_models[idx % 4]:
+            if st.checkbox(model_name, value=(idx < 3), key=f"model_{idx}"):
+                selected_models.append(model_name)
     
-        with agg_col2:
-            st.markdown("**⚙️ Aggregation Options**")
-        
-        # Per-field aggregation selectors in organized layout
-        if sales_fields:
-            st.markdown("**Per-field aggregation:**")
-            per_field_funcs = {}
-            for f in sales_fields:
-                per_field_funcs[f] = st.selectbox(
-                    f"Aggregation for **{f}**:",
-                    options=agg_options,
-                    index=0,
-                    key=f"sales_tab_func_{f}"
+    # Apply RLS to selected models if enabled
+    models_to_run = {}
+    for model_name in selected_models:
+        # Just use base model
+        models_to_run[model_name] = base_models[model_name]
+    
+    # Add stacked versions
+    if use_stacked and stacking_keys:
+        stacked_models = {}
+        for name, model in models_to_run.items():
+            # Add stacked versions for non-stacked models
+            if not isinstance(model, StackedInteractionModel):
+                is_constrained = isinstance(model, (CustomConstrainedRidge, ConstrainedLinearRegression))
+                stacked_models[f"Stacked {name}"] = StackedInteractionModel(
+                    base_model=model,
+                    group_keys=stacking_keys,
+                    enforce_combined_constraints=is_constrained
                 )
-        else:
-            st.info("Select metrics above to configure aggregation")
-            per_field_funcs = {}
-
-    if not sales_fields:
-        st.info("Pick at least one metric to aggregate.")
-        st.stop()
-
-    cA, cB, cC = st.columns(3)
-    with cA:
-        add_rows = st.checkbox("Also add row count", value=False, key="sales_tab_rows")
-    with cB:
-        sort_desc = st.checkbox("Sort by metric (desc)", value=True, key="sales_tab_sort_desc2")
-    with cC:
-        topn = st.number_input("Top N (0 = all)", min_value=0, value=0, step=1, key="sales_tab_topn2")
-
-    cD, cE = st.columns(2)
-    with cD:
-        add_pct = st.checkbox("Add % of total per metric", value=True, key="sales_tab_pct2")
-    with cE:
-        add_total = st.checkbox("Add grand total row", value=True, key="sales_tab_total2")
-
-    run_multi = st.button("Compute aggregation", type="primary", key="sales_tab_run_multi")
-
-    if run_multi:
-        gdf = work_df2.copy()
-
-        # Handle grouping key NA policy (consistent with earlier UI)
-        keep_missing_keys = st.session_state.get("sales_tab_keep_missing_keys", True)
-        if group_by_cols:
-            if keep_missing_keys:
-                for gc in group_by_cols:
-                    if pd.api.types.is_string_dtype(gdf[gc]):
-                        gdf[gc] = gdf[gc].astype("string").fillna("<NA>").str.strip()
-                        gdf[gc] = gdf[gc].replace("", "<NA>")
-                    else:
-                        gdf[gc] = gdf[gc].fillna("<NA>")
-            else:
-                gdf = gdf.dropna(subset=group_by_cols, how="any")
-
-        # Build agg map: one function per selected metric
-        agg_map_per_field = {f: func_map[per_field_funcs[f]] for f in sales_fields}
-
-        if not group_by_cols:
-            # Scalar output: compute each metric independently
-            data = {}
-            for f, fn in agg_map_per_field.items():
-                if fn == "nunique":
-                    data[f"{fn}_{f}"] = [int(gdf[f].nunique(dropna=True))]
-                else:
-                    data[f"{fn}_{f}"] = [getattr(gdf[f], fn)()]
-            if add_rows:
-                data["rows"] = [int(len(gdf))]
-            base_df = pd.DataFrame(data)
-        else:
-            grp = gdf.groupby(group_by_cols, dropna=not keep_missing_keys)
-            base_df = grp.agg(agg_map_per_field).reset_index()
-
-            # Flatten column names if needed (in case pandas returns MultiIndex)
-            if isinstance(base_df.columns, pd.MultiIndex):
-                base_df.columns = ["_".join([str(x) for x in tup if x != ""]) for tup in base_df.columns.to_flat_index()]
-
-            # Optional row count
-            if add_rows:
-                sz = grp.size().reset_index(name="rows")
-                base_df = base_df.merge(sz, on=group_by_cols, how="left")
-
-        # Persist heavy result only once
-        st.session_state["sales_group_base_df"] = base_df
-        st.session_state["sales_group_by_cols"] = group_by_cols
-
-        st.markdown('<div class="success-box">', unsafe_allow_html=True)
-        st.success(f"✅ **Aggregation computed. Use options below to format, sort and save.")
-        st.markdown("</div>", unsafe_allow_html=True)
         
-    # ---- Lightweight formatting/display on previously computed result ----
-    base_df = st.session_state.get("sales_group_base_df")
-    by_cols = st.session_state.get("sales_group_by_cols", [])
-    if isinstance(base_df, pd.DataFrame) and not base_df.empty:
-        metric_cols_all = [c for c in base_df.columns if c not in by_cols]
+        # Update models_to_run with stacked versions
+        models_to_run.update(stacked_models)
 
-        # Display controls that don't trigger heavy recompute
-        st.markdown("---")
-        st.markdown("**Format and view results**")
-        sort_by = st.selectbox(
-            "Sort by",
-            options=metric_cols_all if metric_cols_all else base_df.columns,
-            index=0,
-            key="sales_tab_sort_by"
-        )
-        sort_desc = st.checkbox("Sort descending", value=True, key="sales_tab_sort_desc_display")
-        topn = st.number_input("Top N (0 = all)", min_value=0, value=int(topn or 0), step=1, key="sales_tab_topn_display")
-        add_pct = st.checkbox("Add % of total per metric", value=True, key="sales_tab_pct_display")
-        add_total = st.checkbox("Add grand total row", value=True, key="sales_tab_total_display")
-
-        # Build display df fast from base
-        out_df = base_df.copy()
-        # Ensure group-by columns are strings for safe display
-        for gc in by_cols:
-            if gc in out_df.columns:
-                out_df[gc] = out_df[gc].astype("string").fillna("<NA>")
-
-        metric_cols = [c for c in out_df.columns if c not in by_cols]
-        for mc in metric_cols:
-            out_df[mc] = pd.to_numeric(out_df[mc], errors="coerce")
-
-        if add_pct and metric_cols:
-            for mc in metric_cols:
-                if pd.api.types.is_numeric_dtype(out_df[mc]):
-                    total = float(out_df[mc].sum())
-                    out_df[f"{mc}_pct"] = (out_df[mc] / total).fillna(0.0) if total != 0.0 else 0.0
-
-        out_df = out_df.sort_values(sort_by, ascending=not sort_desc, kind="mergesort")
-        if topn and int(topn) > 0:
-            out_df = out_df.head(int(topn))
-
-        if add_total and by_cols:
-            total_row = {gc: "<TOTAL>" for gc in by_cols}
-            for mc in metric_cols:
-                if pd.api.types.is_numeric_dtype(out_df[mc]):
-                    total_row[mc] = out_df[mc].sum()
-            for mc in [c for c in out_df.columns if c.endswith("_pct")]:
-                total_row[mc] = 1.0
-            out_df = pd.concat([out_df, pd.DataFrame([total_row])], ignore_index=True)
-
-        # Display results in organized tabs
-        result_tab1, result_tab2, result_tab3 = st.tabs([
-            "📊 **Data Table**", 
-            "📈 **Interactive Charts**", 
-            "💾 **Download & Save**"
-        ])
-
-        with result_tab1:
-            st_dataframe_safe(out_df, n=300, use_container_width=True, height=480)
-
-        with result_tab2:
-            st.markdown("### 📈 Interactive Charts")
-            if not out_df.empty and len(out_df) > 1:
-                # Chart options
-                chart_col1, chart_col2 = st.columns(2)
-                with chart_col1:
-                    chart_type = st.selectbox(
-                        "Chart type:",
-                        options=["Bar Chart", "Line Chart", "Scatter Plot", "Pie Chart"],
-                        index=0
-                    )
-                with chart_col2:
-                    if group_by_cols:
-                        x_axis = st.selectbox("X-axis:", options=group_by_cols, index=0)
-                    else:
-                        x_axis = "index"
-                
-                # Y-axis selection (metrics)
-                if metric_cols:
-                    y_axis = st.selectbox("Y-axis (metric):", options=metric_cols, index=0)
-                    
-                    # Create charts based on selection
-                    if chart_type == "Bar Chart":
-                        if group_by_cols:
-                            # Grouped bar chart
-                            fig = px.bar(
-                                out_df.head(50),  # Limit to top 50 for readability
-                                x=x_axis,
-                                y=y_axis,
-                                title=f"{y_axis} by {x_axis}",
-                                color_discrete_sequence=['#1f77b4']
-                            )
-                        else:
-                            # Simple bar chart
-                            fig = px.bar(
-                                out_df,
-                                x=out_df.index,
-                                y=y_axis,
-                                title=f"{y_axis} Overview"
-                            )
-                        fig.update_layout(height=500)
-                        st.plotly_chart(fig, use_container_width=True)
-                    
-                    elif chart_type == "Line Chart":
-                        if group_by_cols:
-                            fig = px.line(
-                                out_df.head(50),
-                                x=x_axis,
-                                y=y_axis,
-                                title=f"{y_axis} Trend by {x_axis}"
-                            )
-                        else:
-                            fig = px.line(
-                                out_df,
-                                y=y_axis,
-                                title=f"{y_axis} Trend"
-                            )
-                        fig.update_layout(height=500)
-                        st.plotly_chart(fig, use_container_width=True)
-                    
-                    elif chart_type == "Scatter Plot":
-                        if len(group_by_cols) >= 2:
-                            fig = px.scatter(
-                                out_df.head(100),
-                                x=group_by_cols[0],
-                                y=y_axis,
-                                size=y_axis,
-                                color=group_by_cols[1] if len(group_by_cols) > 1 else None,
-                                title=f"{y_axis} vs {group_by_cols[0]}"
-                            )
-                        else:
-                            fig = px.scatter(
-                                out_df.head(100),
-                                x=out_df.index,
-                                y=y_axis,
-                                title=f"{y_axis} Distribution"
-                            )
-                        fig.update_layout(height=500)
-                        st.plotly_chart(fig, use_container_width=True)
-                    
-                    elif chart_type == "Pie Chart":
-                        if group_by_cols:
-                            # Top 10 values for pie chart
-                            top_data = out_df.nlargest(10, y_axis)
-                            fig = px.pie(
-                                top_data,
-                                values=y_axis,
-                                names=x_axis,
-                                title=f"Top 10 {y_axis} by {x_axis}"
-                            )
-                            fig.update_layout(height=500)
-                            st.plotly_chart(fig, use_container_width=True)
-                        else:
-                            st.info("Pie charts work best with grouped data")
-                
-                # Summary statistics
-                if metric_cols:
-                    st.markdown("### 📊 Summary Statistics")
-                    summary_cols = st.columns(len(metric_cols))
-                    for i, metric in enumerate(metric_cols):
-                        with summary_cols[i]:
-                            if pd.api.types.is_numeric_dtype(out_df[metric]):
-                                st.metric(
-                                    f"Total {metric}",
-                                    f"{out_df[metric].sum():,.2f}"
-                                )
-                                st.caption(f"Avg: {out_df[metric].mean():,.2f}")
-                            else:
-                                st.metric(
-                                    f"Total {metric}",
-                                    f"{out_df[metric].count():,}"
-                                )
-            else:
-                st.info("Need at least 2 rows of data to create meaningful charts")
+    
+    # Display summary
+    base_count = len(selected_models)
+    stacked_count = sum(1 for k in models_to_run.keys() if k.startswith('Stacked'))
+    
+    if enable_rls:
+        st.info(f"📊 Will run **{len(models_to_run)}** model variants: "
+                f"{base_count} base models (with RLS updates)" +
+                (f" + {stacked_count} stacked" if stacked_count > 0 else ""))
+    else:
+        st.info(f"📊 Will run **{len(models_to_run)}** model variants: "
+                f"{base_count} base models" +
+                (f" + {stacked_count} stacked" if stacked_count > 0 else ""))
+    
+    st.markdown("---")
+    
+    # Ensemble Settings
+    with st.expander("🎯 Ensemble Settings (Model Averaging)", expanded=False):
+        st.caption("Combine multiple models per combination using MAPE-weighted averaging")
         
-        with result_tab3:
-            st.markdown("### 💾 Download & Save Options")
-            csv_bytes = out_df.to_csv(index=False).encode("utf-8")
-            st.download_button(
-                "Download aggregation CSV",
-                data=csv_bytes,
-                file_name=f"sales_aggregation_{sales_src.lower()}.csv",
-                mime="text/csv",
-                key="dl_sales_tab_csv2"
+        col_ens1, col_ens2 = st.columns(2)
+        
+        with col_ens1:
+            enable_ensemble = st.checkbox(
+                "Enable Ensemble",
+                value=False,
+                help="Create weighted ensemble models by averaging coefficients across all models"
             )
+            
+            ensemble_weight_metric = st.selectbox(
+                "Weighting Metric:",
+                options=['MAPE Test', 'MAE Test'],
+                index=0,
+                help="Metric used for weighting models (lower MAPE/MAE = higher weight)"
+            )
+        
+        with col_ens2:
+            st.caption("Optional: Filter models before ensemble")
+            
+            use_r2_filter = st.checkbox("Filter by R² Test ≥", value=False)
+            ensemble_r2_min = st.number_input(
+                "Min R² Test:",
+                min_value=0.0,
+                max_value=1.0,
+                value=0.5,
+                step=0.05,
+                disabled=not use_r2_filter
+            ) if use_r2_filter else None
+            
+            use_mape_filter = st.checkbox("Filter by MAPE Test ≤", value=False)
+            ensemble_mape_max = st.number_input(
+                "Max MAPE Test (%):",
+                min_value=0.0,
+                max_value=100.0,
+                value=50.0,
+                step=5.0,
+                disabled=not use_mape_filter
+            ) if use_mape_filter else None
+            
+            use_mae_filter = st.checkbox("Filter by MAE Test ≤", value=False)
+            ensemble_mae_max = st.number_input(
+                "Max MAE Test:",
+                min_value=0.0,
+                value=100.0,
+                step=10.0,
+                disabled=not use_mae_filter
+            ) if use_mae_filter else None
+        
+        # Sign-based filtering for ensemble
+        st.markdown("---")
+        st.caption("**🔍 Sign-Based Filtering**: Only include models where coefficients match expected signs")
+        
+        use_sign_filter = st.checkbox(
+            "Enable Sign Filtering",
+            value=False,
+            help="Filter out models where coefficients don't match the expected positive/negative constraints"
+        )
+        
+        if use_sign_filter:
+            col_sign1, col_sign2 = st.columns(2)
+            
+            with col_sign1:
+                ensemble_positive_features = st.multiselect(
+                    "Must be Positive (≥ 0):",
+                    options=selected_predictors_working,
+                    default=positive_constraints if positive_constraints else [],
+                    help="Only include models where these features have positive coefficients"
+                )
+            
+            with col_sign2:
+                available_for_negative_ensemble = [p for p in selected_predictors_working if p not in ensemble_positive_features]
+                ensemble_negative_features = st.multiselect(
+                    "Must be Negative (≤ 0):",
+                    options=available_for_negative_ensemble,
+                    default=[c for c in negative_constraints if c in available_for_negative_ensemble] if negative_constraints else [],
+                    help="Only include models where these features have negative coefficients"
+                )
+            
+            if ensemble_positive_features or ensemble_negative_features:
+                st.info(f"📌 Will filter models: {len(ensemble_positive_features)} features must be ≥0, {len(ensemble_negative_features)} features must be ≤0")
+        else:
+            ensemble_positive_features = None
+            ensemble_negative_features = None
+        
+        if enable_ensemble:
+            st.info("📌 Ensemble will create one weighted model per combination by averaging all individual model coefficients")
+    
+    st.markdown("---")
+    
+    # Run button
+    if not selected_predictors_working:
+        st.error("❌ Please select at least one predictor")
+        return
+    
+    if st.button("▶️ RUN MODELS", type="primary", use_container_width=True):
+        # ═══════════════════════════════════════════════════════════════
+        # Initialize stores (clear old data from previous runs)
+        # ═══════════════════════════════════════════════════════════════
+        st.session_state.rls_comparison_store = []
+        st.session_state.beta_history_store = {}
+        
+        # Store flags in session state so they're available in display section
+        st.session_state.enable_rls_flag = enable_rls
+        st.session_state.enable_ensemble_flag = enable_ensemble
+        
+        # Use the working dataframe (either residualized or original)
+        df_to_use = df_working
+        predictors_to_use = selected_predictors_working
+        
+        # Show workflow info
+        if enable_ensemble and enable_rls:
+            st.info("🔄 **Workflow**: CV on all models → Create ensemble → Apply RLS to ensemble only (train → warmup → holdout)")
+        elif enable_ensemble:
+            st.info("🔄 **Workflow**: CV on all models → Create weighted ensemble")
+        elif enable_rls:
+            st.info("🔄 **Workflow**: CV on all models → Apply RLS to each model individually (train → warmup → holdout)")
 
-            with st.expander("Save aggregation to DB (optional)"):
-                default_name = f"sales_agg_{sales_src.lower()}"
-                agg_tbl_name = st.text_input("Table name", value=default_name, key="save_sales_tab_tbl2")
-                save_btn = st.button("Save aggregation to SQLite", key="save_sales_tab_btn2")
-                if save_btn:
-                    try:
-                        tbl = _sanitize_table_name(agg_tbl_name)
-                        with _connect_db() as conn:
-                            write_df_sqlite(out_df, conn, tbl, overwrite=True, chunk_size=100_000)
-                        st.success(f"Saved aggregated table to '{tbl}' in {DB_PATH}")
-                        st.cache_data.clear()
-                    except Exception as e:
-                        st.error(f"Save failed: {e}")
+        with st.spinner("Running models..."):
+            st.session_state.optimized_lambdas = None
+            results_df, predictions_df, lambda_df, ensemble_df = run_model_pipeline(
+                df=df_to_use,
+                grouping_keys=selected_grouping_keys,
+                X_columns=predictors_to_use,
+                target_col=target_col,
+                k_folds=k_folds,
+                std_cols=standardize_cols,
+                models_dict=models_to_run,
+                use_stacked=use_stacked,
+                stacking_keys=stacking_keys,
+                filter_keys_for_stacking=filter_keys_for_stacking,
+                log_transform_y=log_transform_y,
+                min_y_share_pct=min_y_share_pct,
+                enable_rls=enable_rls,
+                holdout_weeks=holdout_weeks,
+                warmup_weeks=warmup_weeks,
+                positive_constraints=positive_constraints,
+                negative_constraints=negative_constraints,
+                rls_lambda_candidates=DEFAULT_RLS_LAMBDA_GRID if enable_rls else None,
+                enable_ensemble=enable_ensemble,
+                ensemble_weight_metric=ensemble_weight_metric,
+                ensemble_filter_r2_min=ensemble_r2_min if use_r2_filter else None,
+                ensemble_filter_mape_max=ensemble_mape_max if use_mape_filter else None,
+                ensemble_filter_mae_max=ensemble_mae_max if use_mae_filter else None,
+                ensemble_filter_positive_features=ensemble_positive_features if use_sign_filter else None,
+                ensemble_filter_negative_features=ensemble_negative_features if use_sign_filter else None
+            )
+            
+            if results_df is not None:
+                st.session_state.results = results_df
+                st.session_state.predictions = predictions_df
+                st.session_state.optimized_lambdas = lambda_df
+                st.session_state.ensemble_results = ensemble_df
+                
+                # Show success message with store counts
+                if enable_rls:
+                    n_comparisons = len(st.session_state.get('rls_comparison_store', []))
+                    n_beta_histories = len(st.session_state.get('beta_history_store', {}))
+                    if n_comparisons > 0 or n_beta_histories > 0:
+                        st.success(f"✅ RLS Analysis Complete: {n_comparisons} comparisons, {n_beta_histories} beta histories stored")
+        
+        
+    # Display results
+    if st.session_state.results is not None:
+        st.markdown("---")
+        st.header("📈 Results")
+        
+        results_df = st.session_state.results
+        
+        st.subheader("📋 Detailed Results (Folds & Aggregates)")
+        st.caption("Includes per-fold rows, holdout metrics, coefficients, and feature means")
+        st.dataframe(results_df, use_container_width=True, height=min(600, 100 + len(results_df) * 20))
+
+        csv_results = results_df.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📥 Download Results CSV",
+            data=csv_results,
+            file_name="modeling_results.csv",
+            mime="text/csv",
+            key='download_model_results'
+        )
+
+        optimized_df = st.session_state.get('optimized_lambdas')
+        if optimized_df is not None and not optimized_df.empty:
+            with st.expander("🔧 Optimized RLS forgetting factors", expanded=False):
+                st.caption("Best lambda chosen per model/group combination based on holdout MAE")
+                st.dataframe(optimized_df, use_container_width=True, height=min(400, 100 + len(optimized_df) * 22))
+                csv_lambdas = optimized_df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="📥 Download Lambda Table",
+                    data=csv_lambdas,
+                    file_name="optimized_rls_lambdas.csv",
+                    mime="text/csv",
+                    key='download_lambda_results'
+                )
+        
+        # Display ensemble results
+        ensemble_df = st.session_state.get('ensemble_results')
+        if ensemble_df is not None and not ensemble_df.empty:
+            with st.expander("🎯 Ensemble Models (Weighted Average)", expanded=True):
+                st.caption("Weighted ensemble models created by averaging coefficients across individual models")
+                
+                # Show key metrics
+                st.markdown("### 📊 Ensemble Summary")
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    st.metric("Combinations", len(ensemble_df))
+                
+                with col2:
+                    avg_models = ensemble_df['Num_Models'].mean() if 'Num_Models' in ensemble_df.columns else 0
+                    st.metric("Avg Models per Combination", f"{avg_models:.1f}")
+                
+                with col3:
+                    avg_concentration = ensemble_df['Weight_Concentration'].mean() if 'Weight_Concentration' in ensemble_df.columns else 0
+                    st.metric("Avg Weight Concentration", f"{avg_concentration:.2%}")
+                
+                st.markdown("---")
+                
+                # Display full ensemble data
+                st.dataframe(ensemble_df, use_container_width=True, height=min(400, 100 + len(ensemble_df) * 22))
+                
+                csv_ensemble = ensemble_df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="📥 Download Ensemble Results",
+                    data=csv_ensemble,
+                    file_name="ensemble_models.csv",
+                    mime="text/csv",
+                    key='download_ensemble_results'
+                )
+
+        # Time series visualization of predictions
+        if st.session_state.predictions is not None:
+            st.subheader("📈 Predicted vs Actual Over Time")
+            
+            predictions_df = st.session_state.predictions.copy()
+            
+            # Check if date column exists
+            date_columns = [col for col in predictions_df.columns if 'date' in col.lower() or 'time' in col.lower() or col.lower() in ['week', 'month', 'year', 'period']]
+            
+            if date_columns:
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    # Date column selection
+                    selected_date_col = st.selectbox(
+                        "Select Date Column:",
+                        options=date_columns,
+                        index=0,
+                        key='date_col_selector'
+                    )
+                
+                with col2:
+                    # Get grouping columns (exclude prediction-specific columns and numeric/data columns)
+                    grouping_cols = [col for col in predictions_df.columns 
+                                if col not in ['Actual', 'Predicted', 'Model', 'Fold', selected_date_col]]
+                    
+                    # Filter to keep only product/category identifier columns (not numeric data)
+                    product_cols = []
+                    for col in grouping_cols:
+                        # Keep only columns that look like identifiers (not pure numeric data)
+                        if predictions_df[col].dtype == 'object' or predictions_df[col].nunique() < 100:
+                            product_cols.append(col)
+                    
+                    # If we have product columns, use them; otherwise use first grouping column
+                    if product_cols:
+                        # Use only the first column (usually product name)
+                        predictions_df['_group_id'] = predictions_df[product_cols[0]].astype(str)
+                        unique_groups = sorted(predictions_df['_group_id'].unique())
+                        
+                        selected_group = st.selectbox(
+                            "Select Product:",
+                            options=unique_groups,
+                            index=0,
+                            key='group_selector'
+                        )
+                    elif grouping_cols:
+                        predictions_df['_group_id'] = predictions_df[grouping_cols[0]].astype(str)
+                        unique_groups = sorted(predictions_df['_group_id'].unique())
+                        
+                        selected_group = st.selectbox(
+                            "Select Product:",
+                            options=unique_groups,
+                            index=0,
+                            key='group_selector'
+                        )
+                    else:
+                        selected_group = None
+                
+                # Convert date column
+                try:
+                    predictions_df[selected_date_col] = pd.to_datetime(predictions_df[selected_date_col])
+                except:
+                    pass  # Keep as is if conversion fails
+                
+                # Filter by selected group
+                if selected_group is not None:
+                    group_data = predictions_df[predictions_df['_group_id'] == selected_group].copy()
+                else:
+                    group_data = predictions_df.copy()
+                
+                # Aggregate predictions by date and model (average across folds)
+                agg_data = group_data.groupby([selected_date_col, 'Model']).agg({
+                    'Actual': 'mean',
+                    'Predicted': 'mean'
+                }).reset_index()
+                
+                agg_data = agg_data.sort_values(selected_date_col)
+                
+                # Get unique models
+                unique_models = sorted(agg_data['Model'].unique())
+                
+                # Create single plot with all models
+                fig = go.Figure()
+                
+                # Color palette for models
+                colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', 
+                        '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
+                
+                # Add actual values (only once - all models have same actuals)
+                actual_data = agg_data.drop_duplicates(subset=[selected_date_col])[
+                    [selected_date_col, 'Actual']
+                ].sort_values(selected_date_col)
+                
+                fig.add_trace(go.Scatter(
+                    x=actual_data[selected_date_col],
+                    y=actual_data['Actual'],
+                    mode='lines+markers',
+                    name='Actual',
+                    line=dict(color='black', width=3),
+                    marker=dict(size=8, symbol='circle')
+                ))
+                
+                # Add predicted values for each model
+                metrics_list = []
+                for idx, model in enumerate(unique_models):
+                    model_data = agg_data[agg_data['Model'] == model].copy()
+                    model_data = model_data.sort_values(selected_date_col)
+                    
+                    # Calculate metrics
+                    r2 = r2_score(model_data['Actual'], model_data['Predicted'])
+                    mae = np.mean(np.abs(model_data['Actual'] - model_data['Predicted']))
+                    rmse = np.sqrt(np.mean((model_data['Actual'] - model_data['Predicted'])**2))
+                    mape = safe_mape(model_data['Actual'], model_data['Predicted'])
+                    
+                    metrics_list.append({
+                        'Model': model,
+                        'R²': r2,
+                        'MAE': mae,
+                        'RMSE': rmse,
+                        'MAPE': mape
+                    })
+                    
+                    # Get color
+                    color = colors[idx % len(colors)]
+                    
+                    # Check if this is an RLS model with holdout predictions
+                    is_rls_model = '+ RLS' in model
+                    
+                    if is_rls_model and 'Fold' in predictions_df.columns:
+                        # Get holdout dates
+                        model_preds = predictions_df[predictions_df['Model'] == model].copy()
+                        holdout_dates = model_preds[model_preds['Fold'] == 'Holdout'][selected_date_col].unique()
+                        
+                        if len(holdout_dates) > 0:
+                            # Create marker properties: circles for training, diamonds for holdout
+                            model_data['marker_symbol'] = model_data[selected_date_col].apply(
+                                lambda x: 'diamond' if x in holdout_dates else 'circle'
+                            )
+                            model_data['marker_size'] = model_data[selected_date_col].apply(
+                                lambda x: 12 if x in holdout_dates else 6
+                            )
+                            
+                            # Single continuous trace with variable markers
+                            fig.add_trace(go.Scatter(
+                                x=model_data[selected_date_col],
+                                y=model_data['Predicted'],
+                                mode='lines+markers',
+                                name=f'{model} (R²={r2:.3f})',
+                                line=dict(color=color, width=2, dash='dash'),
+                                marker=dict(
+                                    size=model_data['marker_size'].tolist(),
+                                    symbol=model_data['marker_symbol'].tolist(),
+                                    color=color,
+                                    line=dict(width=1, color='white')
+                                ),
+                                hovertemplate=f'<b>{model}</b><br>Date: %{{x}}<br>Predicted: %{{y:.2f}}<extra></extra>'
+                            ))
+                        else:
+                            # No holdout data found, use regular display
+                            fig.add_trace(go.Scatter(
+                                x=model_data[selected_date_col],
+                                y=model_data['Predicted'],
+                                mode='lines+markers',
+                                name=f'{model} (R²={r2:.3f})',
+                                line=dict(color=color, width=2, dash='dash'),
+                                marker=dict(size=6, symbol='circle'),
+                                hovertemplate=f'<b>{model}</b><br>Date: %{{x}}<br>Predicted: %{{y:.2f}}<extra></extra>'
+                            ))
+                    else:
+                        # Non-RLS models: regular circles
+                        fig.add_trace(go.Scatter(
+                            x=model_data[selected_date_col],
+                            y=model_data['Predicted'],
+                            mode='lines+markers',
+                            name=f'{model} (R²={r2:.3f})',
+                            line=dict(color=color, width=2, dash='dash'),
+                            marker=dict(size=6, symbol='circle'),
+                            hovertemplate=f'<b>{model}</b><br>Date: %{{x}}<br>Predicted: %{{y:.2f}}<extra></extra>'
+                        ))
+
+
+                # Update layout
+                title_text = f"<b>{selected_group if selected_group else 'All Data'}</b>"
+                
+                fig.update_layout(
+                    title=title_text,
+                    xaxis_title=selected_date_col,
+                    yaxis_title="Value",
+                    hovermode='x unified',
+                    height=600,
+                    showlegend=True,
+                    legend=dict(
+                        orientation="v",
+                        yanchor="top",
+                        y=0.99,
+                        xanchor="right",
+                        x=0.99,
+                        bgcolor="rgba(255,255,255,0.9)"
+                    ),
+                    margin=dict(t=80, b=60, l=60, r=20)
+                )
+                
+                st.plotly_chart(fig, use_container_width=True)
+
+                # Show summary table
+                st.subheader("📊 Model Performance Summary")
+                if metrics_list:
+                    summary_df = pd.DataFrame(metrics_list)
+                    summary_df['R²'] = summary_df['R²'].apply(lambda x: f"{x:.4f}")
+                    summary_df['MAE'] = summary_df['MAE'].apply(lambda x: f"{x:.2f}")
+                    summary_df['RMSE'] = summary_df['RMSE'].apply(lambda x: f"{x:.2f}")
+                    summary_df['MAPE'] = summary_df['MAPE'].apply(lambda x: f"{x:.2f}%")
+                    
+                    st.dataframe(summary_df, use_container_width=True, hide_index=True)
+                    
+            else:
+                st.info("💡 No date/time column found in predictions. Please ensure your data has a date column for time series visualization.")
+        
+        # ═══════════════════════════════════════════════════════════════════════════
+        # RLS ANALYSIS DASHBOARD (independent section, always shown when RLS enabled)
+        # ═══════════════════════════════════════════════════════════════════════════
+        rls_enabled = st.session_state.get('enable_rls_flag', False)
+        ensemble_enabled = st.session_state.get('enable_ensemble_flag', False)
+        has_comparison = bool(st.session_state.get('rls_comparison_store'))
+        has_beta_history = bool(st.session_state.get('beta_history_store'))
+        
+        # Debug info (you can remove this later)
+        if rls_enabled:
+            st.caption(f"🔍 Debug: RLS={rls_enabled}, Ensemble={ensemble_enabled}, Comparisons={len(st.session_state.get('rls_comparison_store', []))}, BetaHistories={len(st.session_state.get('beta_history_store', {}))}")
+        
+        if rls_enabled and (has_comparison or has_beta_history):
+            st.markdown("---")
+            st.header("🔬 RLS Analysis Dashboard")
+            
+            # Show info about what's being compared
+            if ensemble_enabled:
+                st.info("📌 **Ensemble + RLS Mode**: Comparing Static Ensemble (weeks 1-48) vs Ensemble + RLS (train 1-44 → warmup 45-48 → test 49-52)")
+            else:
+                st.info("📌 **Per-Model RLS Mode**: Comparing each model's static vs RLS performance on holdout period")
+            
+            # Create tabs
+            tab1, tab2, tab3 = st.tabs([
+                "📊 Static vs RLS Comparison",
+                "📉 Prediction Visualization",
+                "📈 Beta Evolution Over Time"
+            ])
+            
+            # TAB 1: STATIC VS RLS COMPARISON
+            with tab1:
+                if st.session_state.get('rls_comparison_store'):
+                    comparison_data = st.session_state.rls_comparison_store
+                    
+                    st.subheader("📊 Performance Comparison Table")
+                    if ensemble_enabled:
+                        st.caption("📌 **Ensemble Comparison**: Static Ensemble (trained on weeks 1-48) vs Ensemble + RLS (trained 1-44, warmed 45-48, tested 49-52)")
+                    else:
+                        st.caption("📌 **Per-Model Comparison**: Each model's static vs RLS performance on holdout period")
+                    
+                    comparison_df = pd.DataFrame([{
+                        'Group': rec['Group'],
+                        'Model': rec['Model'],
+                        'R² Static': f"{rec['R2_Static']:.4f}",
+                        'R² RLS': f"{rec['R2_RLS']:.4f}",
+                        'MAE Static': f"{rec['MAE_Static']:.2f}",
+                        'MAE RLS': f"{rec['MAE_RLS']:.2f}",
+                        'MAE Improve %': f"{((rec['MAE_Static'] - rec['MAE_RLS']) / (rec['MAE_Static'] + 1e-6) * 100):.1f}%",
+                        'RMSE Static': f"{rec['RMSE_Static']:.2f}",
+                        'RMSE RLS': f"{rec['RMSE_RLS']:.2f}"
+                    } for rec in comparison_data])
+                    
+                    st.dataframe(comparison_df, use_container_width=True)
+                    
+                    # Download button
+                    csv_comparison = comparison_df.to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        "📥 Download Comparison Table",
+                        csv_comparison,
+                        "rls_vs_static.csv",
+                        "text/csv",
+                        key='download_comparison'
+                    )
+                    
+                    # Summary metrics
+                    st.markdown("---")
+                    st.subheader("📈 Overall Summary")
+                    
+                    col1, col2, col3 = st.columns(3)
+                    
+                    with col1:
+                        avg_mae_static = np.mean([rec['MAE_Static'] for rec in comparison_data])
+                        st.metric("Avg MAE Static", f"{avg_mae_static:.2f}")
+                    
+                    with col2:
+                        avg_mae_rls = np.mean([rec['MAE_RLS'] for rec in comparison_data])
+                        improvement = ((avg_mae_static - avg_mae_rls) / avg_mae_static * 100) if avg_mae_static != 0 else 0
+                        st.metric("Avg MAE RLS", f"{avg_mae_rls:.2f}", delta=f"{-improvement:.1f}%")
+                    
+                    with col3:
+                        wins = sum(1 for rec in comparison_data if rec['MAE_RLS'] < rec['MAE_Static'])
+                        st.metric("RLS Wins", f"{wins}/{len(comparison_data)}")
+                else:
+                    st.info("No comparison data available. Run models with RLS enabled.")
+            
+            # TAB 2: PREDICTION VISUALIZATION
+            with tab2:
+                if st.session_state.get('rls_comparison_store'):
+                    comparison_data = st.session_state.rls_comparison_store
+                    
+                    st.subheader("📉 Predictions: Static vs RLS vs Actual")
+                    st.caption("Visualize how well each approach predicted holdout weeks")
+                    
+                    # Selector
+                    comparison_options = [f"{rec['Group']} | {rec['Model']}" for rec in comparison_data]
+                    selected_comparison = st.selectbox(
+                        "Select Product/Brand + Model:",
+                        options=comparison_options,
+                        key='prediction_viz_selector'
+                    )
+                    
+                    selected_idx = comparison_options.index(selected_comparison)
+                    selected_rec = comparison_data[selected_idx]
+                    
+                    # Metrics cards
+                    col1, col2, col3 = st.columns(3)
+                    
+                    with col1:
+                        st.metric("MAE Static", f"{selected_rec['MAE_Static']:.2f}")
+                        st.metric("R² Static", f"{selected_rec['R2_Static']:.4f}")
+                    
+                    with col2:
+                        mae_delta = selected_rec['MAE_Static'] - selected_rec['MAE_RLS']
+                        st.metric("MAE RLS", f"{selected_rec['MAE_RLS']:.2f}", delta=f"{-mae_delta:.2f}")
+                        r2_delta = selected_rec['R2_RLS'] - selected_rec['R2_Static']
+                        st.metric("R² RLS", f"{selected_rec['R2_RLS']:.4f}", delta=f"{r2_delta:.4f}")
+                    
+                    with col3:
+                        improvement = ((selected_rec['MAE_Static'] - selected_rec['MAE_RLS']) / (selected_rec['MAE_Static'] + 1e-6) * 100)
+                        st.metric("MAE Improvement", f"{improvement:.1f}%")
+                        winner = "🏆 RLS" if selected_rec['MAE_RLS'] < selected_rec['MAE_Static'] else "📊 Static"
+                        st.metric("Winner", winner)
+                    
+                    # Chart
+                    fig_comp = go.Figure()
+                    
+                    fig_comp.add_trace(go.Scatter(
+                        x=selected_rec['Dates'],
+                        y=selected_rec['Actuals'],
+                        mode='lines+markers',
+                        name='Actual',
+                        line=dict(color='black', width=3),
+                        marker=dict(size=12, symbol='circle')
+                    ))
+                    
+                    fig_comp.add_trace(go.Scatter(
+                        x=selected_rec['Dates'],
+                        y=selected_rec['Predictions_Static'],
+                        mode='lines+markers',
+                        name='Static (Frozen Betas)',
+                        line=dict(color='blue', width=2, dash='dash'),
+                        marker=dict(size=10, symbol='square')
+                    ))
+                    
+                    fig_comp.add_trace(go.Scatter(
+                        x=selected_rec['Dates'],
+                        y=selected_rec['Predictions_RLS'],
+                        mode='lines+markers',
+                        name='RLS (Adaptive Betas)',
+                        line=dict(color='green', width=2),
+                        marker=dict(size=10, symbol='diamond')
+                    ))
+                    
+                    fig_comp.update_layout(
+                        title=f"Prediction Comparison: {selected_comparison}",
+                        xaxis_title="Holdout Week",
+                        yaxis_title="Target Value",
+                        height=500,
+                        hovermode='x unified',
+                        showlegend=True
+                    )
+                    
+                    st.plotly_chart(fig_comp, use_container_width=True)
+                else:
+                    st.info("No prediction data available.")
+            
+            # TAB 3: BETA EVOLUTION
+            with tab3:
+                if st.session_state.get('beta_history_store'):
+                    beta_history_store = st.session_state.beta_history_store
+                    
+                    if len(beta_history_store) > 0:
+                        st.subheader("📈 Coefficient Evolution: Training → Warmup → Holdout")
+                        st.caption("Complete beta adaptation timeline showing warmup stabilization and holdout testing")
+                        
+                        # Selector
+                        available_combos = sorted(list(beta_history_store.keys()))
+                        selected_combo = st.selectbox(
+                            "Select Product/Brand + Model:",
+                            options=available_combos,
+                            key='beta_time_combo'
+                        )
+                        
+                        beta_data = beta_history_store[selected_combo]
+                        feature_names = beta_data['feature_names']
+                        warmup_snapshots = beta_data.get('warmup_beta_snapshots', [])
+                        holdout_snapshots = beta_data.get('holdout_beta_snapshots', [])
+                        n_warmup = beta_data.get('n_warmup', 0)
+                        n_holdout = beta_data.get('n_holdout', 0)
+                        
+                        # Build complete timeline
+                        all_snapshots = warmup_snapshots + holdout_snapshots[1:]  # Skip duplicate at boundary
+                        
+                        # Time labels
+                        time_labels = (
+                            ["Initial (Week 44)"] +
+                            [f"Warmup Week {i+1}" for i in range(n_warmup)] +
+                            [f"Holdout Week {i+1}" for i in range(n_holdout)]
+                        )
+                        
+                        # Chart
+                        fig_beta_time = go.Figure()
+                        colors_beta = px.colors.qualitative.Set2
+                        
+                        for i, feature in enumerate(feature_names):
+                            values = [snapshot[i] for snapshot in all_snapshots]
+                            
+                            fig_beta_time.add_trace(go.Scatter(
+                                x=time_labels,
+                                y=values,
+                                mode='lines+markers',
+                                name=feature,
+                                line=dict(color=colors_beta[i % len(colors_beta)], width=2),
+                                marker=dict(size=8),
+                                hovertemplate=f'<b>{feature}</b><br>%{{x}}<br>Beta: %{{y:.4f}}<extra></extra>'
+                            ))
+                        
+                        # Add vertical lines to separate phases
+                        fig_beta_time.add_vline(
+                            x=n_warmup,
+                            line_dash="dash",
+                            line_color="orange",
+                            annotation_text="Warmup Ends"
+                        )
+                        
+                        fig_beta_time.add_vline(
+                            x=n_warmup + 0.5,
+                            line_dash="dash",
+                            line_color="red",
+                            annotation_text="Holdout Testing Starts"
+                        )
+                        
+                        fig_beta_time.update_layout(
+                            title=f"Beta Evolution: {selected_combo}",
+                            xaxis_title="Time Period",
+                            yaxis_title="Coefficient Value",
+                            height=600,
+                            hovermode='x unified',
+                            showlegend=True
+                        )
+                        
+                        st.plotly_chart(fig_beta_time, use_container_width=True)
+                        
+                        # Summary table with 3 phases
+                        st.markdown("---")
+                        st.subheader("📋 Beta Changes Across Phases")
+                        
+                        initial_betas = all_snapshots[0]
+                        after_warmup_betas = all_snapshots[n_warmup]
+                        final_betas = all_snapshots[-1]
+                        
+                        summary_df = pd.DataFrame({
+                            'Feature': feature_names,
+                            'Initial (Week 44)': initial_betas,
+                            'After Warmup (Week 48)': after_warmup_betas,
+                            'Final (Week 52)': final_betas,
+                            'Warmup Change': after_warmup_betas - initial_betas,
+                            'Holdout Change': final_betas - after_warmup_betas,
+                            'Total Change': final_betas - initial_betas
+                        })
+                        
+                        summary_df = summary_df.round(4)
+                        st.dataframe(summary_df, use_container_width=True)
+                    else:
+                        st.info("No beta history available.")
+                else:
+                    st.info("Beta tracking not available. Enable RLS and run models.")
+
+
+if __name__ == "__main__":
+    main()
+
+
+
