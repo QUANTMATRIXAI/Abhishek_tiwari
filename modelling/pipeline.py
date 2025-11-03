@@ -3,17 +3,14 @@ Main Modeling Pipeline
 
 This module contains the core modeling pipeline function that orchestrates the entire
 cross-validation and model training process. It supports various model types including
-regular models, stacked interaction models, and ensemble models with optional RLS
-(Recursive Least Squares) adaptation.
+regular models, stacked interaction models, and ensemble models.
 
 Key features:
 - K-fold cross-validation with adaptive fold selection
 - Support for multiple model types (Ridge, Lasso, ElasticNet, etc.)
 - Stacked interaction models with group-specific coefficients
-- RLS adaptive modeling with warmup and holdout periods
 - Weighted ensemble model creation from CV results
 - Comprehensive metrics tracking (R2, MAPE, MAE, MSE, RMSE)
-- Beta history tracking for RLS models
 """
 
 import numpy as np
@@ -30,16 +27,13 @@ from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 from models import (
     CustomConstrainedRidge,
     ConstrainedLinearRegression,
+    RecursiveLeastSquaresRegressor,
     StackedInteractionModel,
-    StatsMixedEffectsModel,
-    RecursiveLeastSquares
+    StatsMixedEffectsModel
 )
 
 from utils import (
-    validate_rls_data_splits,
     safe_mape,
-    apply_rls_on_holdout,
-    DEFAULT_RLS_LAMBDA_GRID,
     create_ensemble_model_from_results
 )
 
@@ -57,13 +51,6 @@ def run_model_pipeline(
     filter_keys_for_stacking=None,
     log_transform_y=False,
     min_y_share_pct=1.0,
-    # RLS parameters:
-    enable_rls=False,
-    holdout_weeks=4,
-    warmup_weeks=4,
-    positive_constraints=None,
-    negative_constraints=None,
-    rls_lambda_candidates=None,
     # Ensemble parameters:
     enable_ensemble=False,
     ensemble_weight_metric='MAPE Test',
@@ -79,7 +66,6 @@ def run_model_pipeline(
     """
     rows = []
     preds_records = []
-    optimized_lambda_records = []
 
     # Separate stacked and non-stacked models
     stacked_models = {k: v for k, v in models_dict.items() if isinstance(v, StackedInteractionModel)}
@@ -216,47 +202,12 @@ def run_model_pipeline(
         for mname, mdl in regular_models.items():
             fold_results = []
 
-            # Split data into train/warmup/holdout if RLS is enabled
-            if enable_rls and holdout_weeks > 0:
-                gdf_sorted = gdf.sort_index()
-                n_total = len(gdf_sorted)
-
-                # NEW: Three-way split
-                n_train = n_total - holdout_weeks - warmup_weeks  # weeks 1-44
-                n_warmup_end = n_total - holdout_weeks             # up to week 48
-
-                # Check if enough data for warmup approach
-                min_train_needed = 10
-                if n_train < min_train_needed:
-                    st.warning(f"⚠️ {group_display_name}: Not enough data for {warmup_weeks}-week warmup + {holdout_weeks}-week holdout. Using full data.")
-                    train_df = gdf_sorted
-                    warmup_df = None
-                    holdout_df = None
-                    use_holdout_for_group = False
-                else:
-                    train_df = gdf_sorted.iloc[:n_train]                # weeks 1-44
-                    warmup_df = gdf_sorted.iloc[n_train:n_warmup_end]   # weeks 45-48
-                    holdout_df = gdf_sorted.iloc[n_warmup_end:]         # weeks 49-52
-                    use_holdout_for_group = True
-
-                    # Validate data splits to ensure no overlap
-                    try:
-                        validate_rls_data_splits(train_df, warmup_df, holdout_df)
-                    except ValueError as e:
-                        st.error(f"Data split validation failed: {e}")
-                        use_holdout_for_group = False
-            else:
-                train_df = gdf
-                warmup_df = None
-                holdout_df = None
-                use_holdout_for_group = False
-
+            train_df = gdf
+            display_name = mname
 
             # Use TRAIN data for CV (not full data)
             X_full = train_df[present_cols].fillna(0).copy()
             y_full = train_df[target_col].copy()
-
-            display_name = f"{mname} + RLS" if use_holdout_for_group else mname
 
 
             # Regular model processing
@@ -277,10 +228,7 @@ def run_model_pipeline(
 
                 # Standardization
                 scaler = {}
-                # Only check if model itself is RLS (not wrapper)
-                if isinstance(mdl, RecursiveLeastSquares):
-                    cols_to_scale = list(X_tr.columns)
-                elif std_cols:
+                if std_cols:
                     cols_to_scale = [c for c in std_cols if c in X_tr.columns]
                 else:
                     cols_to_scale = []
@@ -291,7 +239,7 @@ def run_model_pipeline(
                     X_te[cols_to_scale] = sc.transform(X_te[cols_to_scale])
                     scaler = {c: (m, s) for c, m, s in zip(cols_to_scale, sc.mean_, sc.scale_)}
 
-                # Train model (no RLS wrapper handling)
+                # Train model
                 model_copy = clone(mdl)
 
                 # Fit based on model type
@@ -433,322 +381,6 @@ def run_model_pipeline(
                 aggregated['Fold'] = 'Avg'  # Mark as average row
                 rows.append(aggregated)
 
-            # ═══════════════════════════════════════════════════════════════
-            # RLS HOLDOUT LOGIC: Train on 1-44, warmup 45-48, test 49-52
-            # CRITICAL: Skip per-model RLS when ensemble is enabled
-            # When ensemble is enabled, RLS runs ONLY on the ensemble (after CV)
-            # ═══════════════════════════════════════════════════════════════
-            if use_holdout_for_group and holdout_df is not None and not enable_ensemble:
-                # Train model on weeks 1-44 ONLY (for RLS initialization)
-                X_train_final = train_df[present_cols].fillna(0).copy()
-                y_train_final = train_df[target_col].copy()
-                y_train_final_original = y_train_final.copy()
-
-                # Log data split sizes for verification
-                debug_msg = f"RLS Data Split for {display_name}: Train={len(train_df)}, Warmup={len(warmup_df)}, Holdout={len(holdout_df)}"
-                # st.caption(debug_msg)  # Uncomment for debugging
-
-                if log_transform_y:
-                    y_train_final = np.log1p(y_train_final)
-
-                # Standardize
-                scaler_final = {}
-                if isinstance(mdl, RecursiveLeastSquares):
-                    cols_to_scale_final = list(X_train_final.columns)
-                elif std_cols:
-                    cols_to_scale_final = [c for c in std_cols if c in X_train_final.columns]
-                else:
-                    cols_to_scale_final = []
-
-                if cols_to_scale_final:
-                    sc_final = StandardScaler().fit(X_train_final[cols_to_scale_final])
-                    X_train_final[cols_to_scale_final] = sc_final.transform(X_train_final[cols_to_scale_final])
-                    scaler_final = {c: (m, s) for c, m, s in zip(cols_to_scale_final, sc_final.mean_, sc_final.scale_)}
-
-                # Train model on weeks 1-44 for RLS initialization
-                rls_init_model = clone(mdl)
-
-                if isinstance(rls_init_model, (CustomConstrainedRidge, ConstrainedLinearRegression)):
-                    rls_init_model.fit(X_train_final.values, y_train_final.values, X_train_final.columns.tolist())
-                elif isinstance(rls_init_model, StatsMixedEffectsModel):
-                    grp_col = rls_init_model.group_col
-                    if grp_col in gdf.columns:
-                        groups_values = train_df[grp_col]
-                    else:
-                        groups_values = train_df[grouping_keys[0]]
-                    rls_init_model.fit(X_train_final, y_train_final, groups_values)
-                else:
-                    rls_init_model.fit(X_train_final, y_train_final)
-
-                # ═══════════════════════════════════════════════════════════════
-                # Prepare WARMUP data (weeks 45-48)
-                # ═══════════════════════════════════════════════════════════════
-                X_warmup = warmup_df[present_cols].fillna(0).copy()
-                y_warmup = warmup_df[target_col].copy()
-                y_warmup_original = y_warmup.copy()
-
-                if log_transform_y:
-                    y_warmup = np.log1p(y_warmup)
-
-                if cols_to_scale_final:
-                    X_warmup[cols_to_scale_final] = sc_final.transform(X_warmup[cols_to_scale_final])
-
-                # ═══════════════════════════════════════════════════════════════
-                # Prepare HOLDOUT data (weeks 49-52)
-                # ═══════════════════════════════════════════════════════════════
-                X_holdout = holdout_df[present_cols].fillna(0).copy()
-                y_holdout = holdout_df[target_col].copy()
-                y_holdout_original = y_holdout.copy()
-
-                if log_transform_y:
-                    y_holdout = np.log1p(y_holdout)
-
-                if cols_to_scale_final:
-                    X_holdout[cols_to_scale_final] = sc_final.transform(X_holdout[cols_to_scale_final])
-
-                # ═══════════════════════════════════════════════════════════════
-                # Apply RLS with warmup using lambda grid search
-                # ═══════════════════════════════════════════════════════════════
-                lambda_grid = rls_lambda_candidates if rls_lambda_candidates is not None else DEFAULT_RLS_LAMBDA_GRID
-                best_lambda = None
-                best_holdout_preds = None
-                best_rls_results = None
-                best_warmup_mae = None
-
-                for candidate_lambda in lambda_grid:
-                    candidate_results = apply_rls_on_holdout(
-                        trained_model=rls_init_model,
-                        X_train=X_train_final.values,
-                        y_train=y_train_final.values,
-                        X_warmup=X_warmup.values,
-                        y_warmup=y_warmup.values,
-                        X_holdout=X_holdout.values,
-                        y_holdout=y_holdout.values,
-                        feature_names=present_cols,
-                        forgetting_factor=candidate_lambda,
-                        nonnegative_features=positive_constraints,
-                        nonpositive_features=negative_constraints
-                    )
-
-                    # CRITICAL FIX: Use WARMUP predictions for lambda selection to avoid data leakage
-                    warmup_preds = candidate_results.get('warmup_predictions', np.array([]))
-
-                    if len(warmup_preds) > 0:
-                        if log_transform_y:
-                            warmup_preds_transformed = np.expm1(warmup_preds)
-                            warmup_preds_transformed = np.maximum(warmup_preds_transformed, 0)
-                        else:
-                            warmup_preds_transformed = warmup_preds
-
-                        # Calculate MAE on warmup period for hyperparameter selection
-                        candidate_warmup_mae = mean_absolute_error(y_warmup_original, warmup_preds_transformed)
-                    else:
-                        candidate_warmup_mae = float('inf')
-
-                    # Still get holdout predictions for final evaluation
-                    candidate_preds = candidate_results['predictions']
-                    if log_transform_y:
-                        candidate_preds = np.expm1(candidate_preds)
-                        candidate_preds = np.maximum(candidate_preds, 0)
-
-                    if np.isnan(candidate_warmup_mae):
-                        continue
-
-                    if best_warmup_mae is None or candidate_warmup_mae < best_warmup_mae:
-                        best_warmup_mae = candidate_warmup_mae
-                        best_lambda = candidate_lambda
-                        best_holdout_preds = candidate_preds
-                        best_rls_results = candidate_results
-
-                if best_rls_results is None:
-                    fallback_lambda = lambda_grid[0]
-                    best_lambda = fallback_lambda
-                    best_rls_results = apply_rls_on_holdout(
-                        trained_model=rls_init_model,
-                        X_train=X_train_final.values,
-                        y_train=y_train_final.values,
-                        X_warmup=X_warmup.values,
-                        y_warmup=y_warmup.values,
-                        X_holdout=X_holdout.values,
-                        y_holdout=y_holdout.values,
-                        feature_names=present_cols,
-                        forgetting_factor=fallback_lambda,
-                        nonnegative_features=positive_constraints,
-                        nonpositive_features=negative_constraints
-                    )
-                    best_holdout_preds = best_rls_results['predictions']
-                    if log_transform_y:
-                        best_holdout_preds = np.expm1(best_holdout_preds)
-                        best_holdout_preds = np.maximum(best_holdout_preds, 0)
-
-                rls_results = best_rls_results
-                holdout_preds = best_holdout_preds
-
-                # Get RLS metrics (retain MAE for comparisons, keep MAPE for result table)
-                r2_holdout = r2_score(y_holdout_original, holdout_preds)
-                mae_holdout = mean_absolute_error(y_holdout_original, holdout_preds)
-                mse_holdout = mean_squared_error(y_holdout_original, holdout_preds)
-                rmse_holdout = np.sqrt(mse_holdout)
-                mape_holdout = safe_mape(y_holdout_original, holdout_preds)
-
-                lambda_record = {k: v for k, v in zip(grouping_keys, gvals)}
-                lambda_record.update({
-                    "Model": display_name,
-                    "Best Lambda": best_lambda,
-                    "Holdout MAE": mae_holdout
-                })
-                optimized_lambda_records.append(lambda_record)
-
-                # ═══════════════════════════════════════════════════════════════
-                # STATIC BASELINE: Train on weeks 1-48, predict 49-52
-                # ═══════════════════════════════════════════════════════════════
-                # Combine train + warmup for static model (weeks 1-48)
-                train_warmup_df = pd.concat([train_df, warmup_df], axis=0)
-                X_train_static = train_warmup_df[present_cols].fillna(0).copy()
-                y_train_static = train_warmup_df[target_col].copy()
-
-                if log_transform_y:
-                    y_train_static = np.log1p(y_train_static)
-
-                # Use same scaler (fitted on 1-44, but apply to 1-48)
-                if cols_to_scale_final:
-                    X_train_static[cols_to_scale_final] = sc_final.transform(X_train_static[cols_to_scale_final])
-
-                # Train static model on full 48 weeks
-                static_model = clone(mdl)
-
-                if isinstance(static_model, (CustomConstrainedRidge, ConstrainedLinearRegression)):
-                    static_model.fit(X_train_static.values, y_train_static.values, X_train_static.columns.tolist())
-                elif isinstance(static_model, StatsMixedEffectsModel):
-                    grp_col = static_model.group_col
-                    if grp_col in gdf.columns:
-                        groups_static = train_warmup_df[grp_col]
-                    else:
-                        groups_static = train_warmup_df[grouping_keys[0]]
-                    static_model.fit(X_train_static, y_train_static, groups_static)
-                else:
-                    static_model.fit(X_train_static, y_train_static)
-
-                # Predict with frozen betas
-                baseline_static_preds = static_model.predict(
-                    X_holdout.values if hasattr(X_holdout, 'values') else X_holdout
-                )
-
-                if log_transform_y:
-                    baseline_static_preds = np.expm1(baseline_static_preds)
-                    baseline_static_preds = np.maximum(baseline_static_preds, 0)
-
-                # Calculate static metrics
-                r2_static = r2_score(y_holdout_original, baseline_static_preds)
-                mae_static = mean_absolute_error(y_holdout_original, baseline_static_preds)
-                rmse_static = np.sqrt(mean_squared_error(y_holdout_original, baseline_static_preds))
-                mape_static = safe_mape(y_holdout_original, baseline_static_preds)
-
-                # ═══════════════════════════════════════════════════════════════
-                # STORE WARMUP PREDICTIONS (NEW)
-                # ═══════════════════════════════════════════════════════════════
-                warmup_preds = rls_results.get('warmup_predictions', np.array([]))
-                warmup_actuals = rls_results.get('warmup_actuals', np.array([]))
-
-                if len(warmup_preds) > 0:
-                    # Reverse log transform on warmup predictions
-                    if log_transform_y:
-                        warmup_preds = np.expm1(warmup_preds)
-                        warmup_preds = np.maximum(warmup_preds, 0)
-
-                    # Store warmup predictions
-                    pr_warmup = warmup_df.copy()
-                    pr_warmup["Actual"] = warmup_actuals if not log_transform_y else np.expm1(warmup_actuals)
-                    pr_warmup["Predicted"] = warmup_preds
-                    pr_warmup["Model"] = display_name
-                    pr_warmup["Fold"] = "Warmup"
-                    preds_records.append(pr_warmup)
-
-                # ═══════════════════════════════════════════════════════════════
-                # STORE FOR COMPARISON VISUALIZATION
-                # ═══════════════════════════════════════════════════════════════
-                if 'rls_comparison_store' not in st.session_state:
-                    st.session_state.rls_comparison_store = []
-
-                st.session_state.rls_comparison_store.append({
-                    'Group': group_display_name,
-                    'Model': mname,
-                    'Dates': [f"Week {i+1}" for i in range(len(y_holdout_original))],
-                    'Actuals': y_holdout_original.values,
-                    'Predictions_Static': baseline_static_preds,
-                    'Predictions_RLS': holdout_preds,
-                    'R2_Static': r2_static,
-                    'R2_RLS': r2_holdout,
-                    'MAE_Static': mae_static,
-                    'MAE_RLS': mae_holdout,
-                    'RMSE_Static': rmse_static,
-                    'RMSE_RLS': rmse_holdout
-                })
-
-                # Store beta history
-                if 'beta_history' in rls_results:
-                    group_key = f"{group_display_name} | {mname} + RLS"
-
-                    if 'beta_history_store' not in st.session_state:
-                        st.session_state.beta_history_store = {}
-
-                    st.session_state.beta_history_store[group_key] = rls_results['beta_history']
-
-                # Create holdout row
-                if fold_results:
-                    cv_avg = aggregated[aggregated['Fold'] == 'Avg'].iloc[0].to_dict() if len(aggregated) > 0 else {}
-
-                    d = {k: v for k, v in zip(grouping_keys, gvals)}
-                    d.update({
-                        "Model": display_name,
-                        "Fold": "Holdout",
-                        "B0 (Original)": cv_avg.get("B0 (Original)", np.nan),
-                        "R2 Train": cv_avg.get("R2 Train", np.nan),
-                        "R2 Test": cv_avg.get("R2 Test", np.nan),
-                        "R2 Holdout": r2_holdout,
-                        "MAPE Train": cv_avg.get("MAPE Train", np.nan),
-                        "MAPE Test": cv_avg.get("MAPE Test", np.nan),
-                        "MAPE Holdout": mape_holdout,
-                        "MAE Train": cv_avg.get("MAE Train", np.nan),
-                        "MAE Test": cv_avg.get("MAE Test", np.nan),
-                        "MAE Holdout": mae_holdout,
-                        "MSE Train": cv_avg.get("MSE Train", np.nan),
-                        "MSE Test": cv_avg.get("MSE Test", np.nan),
-                        "MSE Holdout": mse_holdout,
-                        "RMSE Train": cv_avg.get("RMSE Train", np.nan),
-                        "RMSE Test": cv_avg.get("RMSE Test", np.nan),
-                        "RMSE Holdout": rmse_holdout,
-                    })
-
-                    # Add mean X from training
-                    mean_x = train_df[present_cols].mean(numeric_only=True).to_dict()
-                    for c, v in mean_x.items():
-                        d[c] = v
-
-                    # Add final betas (FIXED - use holdout_beta_snapshots)
-                    if 'beta_history' in rls_results:
-                        holdout_snapshots = rls_results['beta_history'].get('holdout_beta_snapshots', [])
-                        if len(holdout_snapshots) > 0:
-                            final_beta = holdout_snapshots[-1]
-
-                            for i, col in enumerate(present_cols):
-                                beta_val = final_beta[i+1] if i+1 < len(final_beta) else 0
-                                if col in scaler_final:
-                                    mu, sd = scaler_final[col]
-                                    beta_val = beta_val / sd
-                                d[f"Beta_{col}"] = beta_val
-
-                    rows.append(pd.DataFrame([d]))
-
-                    # Store holdout predictions
-                    pr = holdout_df.copy()
-                    pr["Actual"] = y_holdout_original.values
-                    pr["Predicted"] = holdout_preds
-                    pr["Model"] = display_name
-                    pr["Fold"] = "Holdout"
-                    preds_records.append(pr)
-
-
     # ═════════════════════════════════════════════════════════════════════════
     # PROCESS STACKED MODELS (grouped by FILTER keys only, interaction on STACKING keys)
     # ═════════════════════════════════════════════════════════════════════════
@@ -831,13 +463,7 @@ def run_model_pipeline(
 
                 # Standardization BEFORE resetting indices
                 scaler = {}
-                # Check if base model of stacked model is RLS
-                is_rls_base = isinstance(mdl.base_model, RecursiveLeastSquares) if hasattr(mdl, 'base_model') else False
-
-                # RLS ALWAYS needs ALL features standardized
-                if is_rls_base:
-                    cols_to_scale = list(X_tr_orig.columns)
-                elif std_cols:
+                if std_cols:
                     cols_to_scale = [c for c in std_cols if c in X_tr_orig.columns]
                 else:
                     cols_to_scale = []
@@ -1052,7 +678,7 @@ def run_model_pipeline(
     results_df = results_df[existing_cols]
 
     preds_df = pd.concat(preds_records, ignore_index=True) if preds_records else None
-    optimized_lambda_df = pd.DataFrame(optimized_lambda_records) if optimized_lambda_records else None
+    optimized_lambda_df = None
 
     # ═══════════════════════════════════════════════════════════════════════════
     # ENSEMBLE MODEL CREATION (if enabled)
@@ -1117,332 +743,5 @@ def run_model_pipeline(
             results_df = pd.concat([results_df, ensemble_df], ignore_index=True)
 
             st.success(f"✅ Created {len(ensembles)} ensemble models")
-
-            # ═══════════════════════════════════════════════════════════════════════════
-            # RLS ON ENSEMBLE MODELS (if both ensemble and RLS are enabled)
-            # Uses ensemble betas from weeks 1-44 → warmup 45-48 → test 49-52
-            # ═══════════════════════════════════════════════════════════════════════════
-            if enable_rls and holdout_weeks > 0:
-                st.info(f"🔄 Applying RLS to ensemble models: Train weeks 1-{44 if warmup_weeks == 4 else 'N-H-W'} → Warmup → Holdout test...")
-
-                ensemble_rls_rows = []
-
-                # Create expander for debug messages
-                debug_expander = st.expander(f"📋 RLS Processing Details ({len(ensembles)} ensemble(s))", expanded=False)
-
-                for combo_key, ensemble_data in ensembles.items():
-                    debug_expander.caption(f"🔄 Processing: {combo_key}")
-                    # Get the original data for this combination
-                    if not grouping_keys or combo_key == 'ALL':
-                        gdf = df.copy()
-                        group_display_name = "All"
-                    else:
-                        # Parse combo_key to filter data
-                        if " | " in combo_key:
-                            parts = combo_key.split(" | ")
-                            filters = {}
-                            for part in parts:
-                                if "=" in part:
-                                    k, v = part.split("=", 1)
-                                    filters[k] = v
-
-                            gdf = df.copy()
-                            for k, v in filters.items():
-                                if k in gdf.columns:
-                                    gdf = gdf[gdf[k].astype(str) == str(v)]
-                            group_display_name = combo_key
-                        elif "=" in combo_key:
-                            # Single key case: "Brand=A"
-                            k, v = combo_key.split("=", 1)
-                            gdf = df.copy()
-                            if k in gdf.columns:
-                                gdf = gdf[gdf[k].astype(str) == str(v)]
-                            group_display_name = combo_key
-                        else:
-                            # Fallback: use entire dataset
-                            gdf = df.copy()
-                            group_display_name = combo_key
-
-                    if len(gdf) == 0:
-                        continue
-
-                    # Sort by index (assuming time order)
-                    gdf_sorted = gdf.sort_index()
-                    n_total = len(gdf_sorted)
-
-                    # Split: train (1-44), warmup (45-48), holdout (49-52)
-                    n_train = n_total - holdout_weeks - warmup_weeks
-                    n_warmup_end = n_total - holdout_weeks
-
-                    debug_expander.caption(f"  → Total={n_total}, Train={n_train}, Warmup={n_warmup_end-n_train}, Holdout={holdout_weeks}")
-
-                    if n_train < 10:
-                        debug_expander.warning(f"  ⚠️ Skipped {combo_key}: Not enough training data (need ≥10, have {n_train})")
-                        continue
-
-                    train_df = gdf_sorted.iloc[:n_train]
-                    warmup_df = gdf_sorted.iloc[n_train:n_warmup_end]
-                    holdout_df = gdf_sorted.iloc[n_warmup_end:]
-
-                    # Prepare data
-                    present_cols = [c for c in X_columns if c in gdf_sorted.columns]
-                    if len(present_cols) < len(X_columns):
-                        continue
-
-                    X_train = train_df[present_cols].fillna(0).values
-                    y_train = train_df[target_col].values
-                    y_train_original = y_train.copy()
-
-                    X_warmup = warmup_df[present_cols].fillna(0).values
-                    y_warmup = warmup_df[target_col].values
-                    y_warmup_original = y_warmup.copy()
-
-                    X_holdout = holdout_df[present_cols].fillna(0).values
-                    y_holdout = holdout_df[target_col].values
-                    y_holdout_original = y_holdout.copy()
-
-                    if log_transform_y:
-                        y_train = np.log1p(y_train)
-                        y_warmup = np.log1p(y_warmup)
-                        y_holdout = np.log1p(y_holdout)
-
-                    # Standardization (RLS needs ALL features standardized)
-                    sc = StandardScaler().fit(X_train)
-                    X_train = sc.transform(X_train)
-                    X_warmup = sc.transform(X_warmup)
-                    X_holdout = sc.transform(X_holdout)
-
-                    # Extract ensemble betas (already in original feature names format: Beta_<feature>)
-                    ensemble_betas_dict = ensemble_data['ensemble_betas']
-                    ensemble_intercept = ensemble_data['ensemble_intercept']
-
-                    # Convert to array in correct order
-                    ensemble_beta_array = np.array([
-                        ensemble_betas_dict.get(f"Beta_{feat}", 0.0)
-                        for feat in present_cols
-                    ])
-
-                    # CRITICAL FIX: Transform ensemble betas from original scale to standardized scale
-                    # Since X data is standardized, we need to adjust the betas accordingly
-                    # For standardized data: beta_std = beta_orig / sd
-                    # And intercept_std = intercept_orig - sum(beta_orig * mean / sd)
-                    standardized_beta_array = ensemble_beta_array / sc.scale_
-                    standardized_intercept = ensemble_intercept - np.sum(ensemble_beta_array * sc.mean_ / sc.scale_)
-
-                    # Apply RLS with ensemble betas as initialization
-                    lambda_grid = rls_lambda_candidates if rls_lambda_candidates is not None else DEFAULT_RLS_LAMBDA_GRID
-                    best_lambda = None
-                    best_holdout_preds = None
-                    best_mae = None
-                    best_rls_results = None
-
-                    for candidate_lambda in lambda_grid:
-                        rls_results = apply_rls_on_holdout(
-                            trained_model=None,  # Will use initial_beta/initial_intercept instead
-                            X_train=X_train,
-                            y_train=y_train,
-                            X_warmup=X_warmup,
-                            y_warmup=y_warmup,
-                            X_holdout=X_holdout,
-                            y_holdout=y_holdout,
-                            feature_names=present_cols,
-                            forgetting_factor=candidate_lambda,
-                            nonnegative_features=positive_constraints,
-                            nonpositive_features=negative_constraints,
-                            initial_beta=standardized_beta_array,  # Use standardized ensemble betas!
-                            initial_intercept=standardized_intercept  # Use standardized ensemble intercept!
-                        )
-
-                        candidate_preds = rls_results['predictions']
-                        if log_transform_y:
-                            candidate_preds = np.expm1(candidate_preds)
-                            # Check for negative predictions before clipping
-                            n_negative = np.sum(candidate_preds < 0)
-                            if n_negative > 0:
-                                debug_expander.warning(f"  ⚠️ {n_negative}/{len(candidate_preds)} RLS predictions were negative (clipped to 0)")
-                            candidate_preds = np.maximum(candidate_preds, 0)
-
-                        # CRITICAL FIX: Use WARMUP MAE for lambda selection to avoid data leakage
-                        warmup_preds = rls_results.get('warmup_predictions', np.array([]))
-                        if len(warmup_preds) > 0:
-                            if log_transform_y:
-                                warmup_preds_transformed = np.expm1(warmup_preds)
-                                warmup_preds_transformed = np.maximum(warmup_preds_transformed, 0)
-                            else:
-                                warmup_preds_transformed = warmup_preds
-                            candidate_warmup_mae = mean_absolute_error(y_warmup_original, warmup_preds_transformed)
-                        else:
-                            candidate_warmup_mae = float('inf')
-
-                        if np.isnan(candidate_warmup_mae):
-                            continue
-
-                        if best_mae is None or candidate_warmup_mae < best_mae:
-                            best_mae = candidate_warmup_mae
-                            best_lambda = candidate_lambda
-                            best_holdout_preds = candidate_preds
-                            best_rls_results = rls_results
-
-                    if best_rls_results is None:
-                        debug_expander.warning(f"  ⚠️ RLS failed for {combo_key}: No valid lambda found")
-                        continue
-
-                    debug_expander.caption(f"  ✅ RLS successful! Best lambda={best_lambda:.3f}")
-
-                    # Calculate metrics
-                    r2_holdout = r2_score(y_holdout_original, best_holdout_preds)
-                    mape_holdout = safe_mape(y_holdout_original, best_holdout_preds)
-                    rmse_holdout = np.sqrt(mean_squared_error(y_holdout_original, best_holdout_preds))
-
-                    # Create ensemble + RLS row
-                    row = {}
-                    if grouping_keys and " | " in combo_key:
-                        parts = combo_key.split(" | ")
-                        for part in parts:
-                            if "=" in part:
-                                k, v = part.split("=", 1)
-                                row[k] = v
-
-                    row['Model'] = 'Weighted Ensemble + RLS'
-                    row['Fold'] = 'Holdout'
-                    row['R2 Holdout'] = r2_holdout
-                    row['MAPE Holdout'] = mape_holdout
-                    row['MAE Holdout'] = best_mae
-                    row['RMSE Holdout'] = rmse_holdout
-                    row['Best_Lambda'] = best_lambda
-
-                    # Add final betas from RLS
-                    if 'beta_history' in best_rls_results:
-                        holdout_snapshots = best_rls_results['beta_history'].get('holdout_beta_snapshots', [])
-                        if len(holdout_snapshots) > 0:
-                            final_beta = holdout_snapshots[-1]
-                            row['B0 (Original)'] = final_beta[0]
-                            for i, feat in enumerate(present_cols):
-                                # Reverse standardization
-                                beta_val = final_beta[i+1]
-                                beta_val = beta_val / sc.scale_[i]
-                                row[f"Beta_{feat}"] = beta_val
-
-                    ensemble_rls_rows.append(row)
-
-                    # ═══════════════════════════════════════════════════════════════
-                    # STORE WARMUP PREDICTIONS
-                    # ═══════════════════════════════════════════════════════════════
-                    warmup_preds = best_rls_results.get('warmup_predictions', np.array([]))
-                    warmup_actuals = best_rls_results.get('warmup_actuals', np.array([]))
-
-                    if len(warmup_preds) > 0:
-                        # Reverse log transform on warmup predictions
-                        if log_transform_y:
-                            warmup_preds = np.expm1(warmup_preds)
-                            warmup_preds = np.maximum(warmup_preds, 0)
-                            warmup_actuals = np.expm1(warmup_actuals)
-
-                        # Store warmup predictions
-                        pr_warmup = warmup_df.copy()
-                        pr_warmup["Actual"] = warmup_actuals
-                        pr_warmup["Predicted"] = warmup_preds
-                        pr_warmup["Model"] = 'Weighted Ensemble + RLS'
-                        pr_warmup["Fold"] = "Warmup"
-                        preds_records.append(pr_warmup)
-
-                    # Store holdout predictions
-                    pr = holdout_df.copy()
-                    pr["Actual"] = y_holdout_original
-                    pr["Predicted"] = best_holdout_preds
-                    pr["Model"] = 'Weighted Ensemble + RLS'
-                    pr["Fold"] = "Holdout"
-                    preds_records.append(pr)
-
-                    # Store lambda
-                    lambda_record = {}
-                    if grouping_keys and " | " in combo_key:
-                        parts = combo_key.split(" | ")
-                        for part in parts:
-                            if "=" in part:
-                                k, v = part.split("=", 1)
-                                lambda_record[k] = v
-                    lambda_record['Model'] = 'Weighted Ensemble + RLS'
-                    lambda_record['Best Lambda'] = best_lambda
-                    lambda_record['Holdout MAE'] = best_mae
-                    optimized_lambda_records.append(lambda_record)
-
-                    # ═══════════════════════════════════════════════════════════════
-                    # CREATE STATIC BASELINE FOR COMPARISON (ensemble without RLS)
-                    # ═══════════════════════════════════════════════════════════════
-                    # Create static predictions using ensemble betas on train+warmup (weeks 1-48)
-                    train_warmup_data = pd.concat([train_df, warmup_df])
-                    X_train_warmup = train_warmup_data[present_cols].fillna(0).values
-                    y_train_warmup = train_warmup_data[target_col].values
-
-                    if log_transform_y:
-                        y_train_warmup = np.log1p(y_train_warmup)
-
-                    # Standardize with same scaler
-                    sc_trainwarmup = StandardScaler().fit(X_train_warmup)
-                    X_train_warmup_scaled = sc_trainwarmup.transform(X_train_warmup)
-                    X_holdout_scaled_trainwarmup = sc_trainwarmup.transform(X_holdout)
-
-                    # Static predictions using ensemble betas (no RLS adaptation)
-                    # Convert ensemble betas to standardized space
-                    ensemble_beta_array_trainwarmup = np.array([
-                        ensemble_betas_dict.get(f"Beta_{feat}", 0.0) * sc_trainwarmup.scale_[i]
-                        for i, feat in enumerate(present_cols)
-                    ])
-
-                    baseline_static_preds = (
-                        X_holdout_scaled_trainwarmup @ ensemble_beta_array_trainwarmup +
-                        ensemble_intercept
-                    )
-
-                    if log_transform_y:
-                        baseline_static_preds = np.expm1(baseline_static_preds)
-                        # Check for negative predictions before clipping
-                        n_negative_static = np.sum(baseline_static_preds < 0)
-                        if n_negative_static > 0:
-                            debug_expander.warning(f"  ⚠️ {n_negative_static}/{len(baseline_static_preds)} Static predictions were negative (clipped to 0)")
-                        baseline_static_preds = np.maximum(baseline_static_preds, 0)
-
-                    # Calculate static metrics
-                    r2_static = r2_score(y_holdout_original, baseline_static_preds)
-                    mae_static = mean_absolute_error(y_holdout_original, baseline_static_preds)
-                    rmse_static = np.sqrt(mean_squared_error(y_holdout_original, baseline_static_preds))
-
-                    # ═══════════════════════════════════════════════════════════════
-                    # STORE FOR COMPARISON VISUALIZATION
-                    # ═══════════════════════════════════════════════════════════════
-                    debug_expander.caption(f"  💾 Storing comparison data for {group_display_name}")
-
-                    if 'rls_comparison_store' not in st.session_state:
-                        st.session_state.rls_comparison_store = []
-
-                    st.session_state.rls_comparison_store.append({
-                        'Group': group_display_name,
-                        'Model': 'Weighted Ensemble',
-                        'Dates': [f"Week {i+1}" for i in range(len(y_holdout_original))],
-                        'Actuals': y_holdout_original,
-                        'Predictions_Static': baseline_static_preds,
-                        'Predictions_RLS': best_holdout_preds,
-                        'R2_Static': r2_static,
-                        'R2_RLS': r2_holdout,
-                        'MAE_Static': mae_static,
-                        'MAE_RLS': best_mae,
-                        'RMSE_Static': rmse_static,
-                        'RMSE_RLS': rmse_holdout
-                    })
-
-                    # Store beta history
-                    if 'beta_history' in best_rls_results:
-                        group_key = f"{group_display_name} | Weighted Ensemble + RLS"
-
-                        if 'beta_history_store' not in st.session_state:
-                            st.session_state.beta_history_store = {}
-
-                        st.session_state.beta_history_store[group_key] = best_rls_results['beta_history']
-
-                if ensemble_rls_rows:
-                    ensemble_rls_df = pd.DataFrame(ensemble_rls_rows)
-                    results_df = pd.concat([results_df, ensemble_rls_df], ignore_index=True)
-                    st.success(f"✅ Applied RLS to {len(ensemble_rls_rows)} ensemble models")
 
     return results_df, preds_df, optimized_lambda_df, ensemble_df

@@ -20,7 +20,6 @@ The main entry point for the application. Contains:
 - Data upload and configuration UI
 - Model selection interface
 - Results visualization and dashboards
-- RLS analysis tabs
 - Download functionality
 
 **Key Function:** `main()` - Streamlit application orchestrator
@@ -40,21 +39,20 @@ Contains all custom model implementations:
    - Gradient descent with constraints
    - Adam optimizer support
 
-3. **`StackedInteractionModel`** - Group-specific coefficient modeling
+3. **`RecursiveLeastSquaresRegressor`** - Sequential coefficient updating
+   - Standard RLS with configurable forgetting factor
+   - Supports optional coefficient history tracking
+   - Provides incremental `update()` method for streaming data
+
+4. **`StackedInteractionModel`** - Group-specific coefficient modeling
    - Creates interaction terms for each group
    - Dummy variable encoding
    - Extracts per-group coefficients
 
-4. **`StatsMixedEffectsModel`** - Wrapper for statsmodels MixedLM
+5. **`StatsMixedEffectsModel`** - Wrapper for statsmodels MixedLM
    - Random effects per group
    - Fallback to LinearRegression if mixed effects fail
    - Minimum group size filtering
-
-5. **`RecursiveLeastSquares`** - Online learning with RLS
-   - Forgetting factor for time-series adaptation
-   - Covariance matrix tracking
-   - Coefficient constraints
-   - Beta history tracking
 
 ---
 
@@ -62,15 +60,10 @@ Contains all custom model implementations:
 
 **Helper Functions:**
 - `safe_mape()` - MAPE calculation with outlier protection
-- `validate_rls_data_splits()` - Ensures no data leakage
-- `apply_rls_on_holdout()` - Applies RLS with warmup/holdout phases
 
 **Ensemble Functions:**
 - `build_weighted_ensemble_model()` - Exponential weighting based on MAPE
 - `create_ensemble_model_from_results()` - Creates ensembles from CV results with filtering
-
-**Constants:**
-- `DEFAULT_RLS_LAMBDA_GRID` - Default forgetting factors: [0.95, 0.96, ..., 1.0]
 
 ---
 
@@ -83,7 +76,7 @@ Orchestrates the entire modeling workflow:
 1. **Data Splitting**
    - Groups data by specified keys
    - Filters groups by Y-variable share
-   - Creates train/warmup/holdout splits for RLS
+   - Creates train/test splits for evaluation
 
 2. **Cross-Validation**
    - K-fold CV with adaptive fold selection (2-5 folds based on sample size)
@@ -95,21 +88,13 @@ Orchestrates the entire modeling workflow:
    - Handles custom constrained models
    - Tracks coefficients and metrics
 
-4. **RLS Adaptation** (Optional)
-   - Trains on weeks 1-44
-   - Warms up on weeks 45-48 (lambda tuning)
-   - Tests on weeks 49-52 (frozen betas)
-   - Compares RLS vs. static baseline
-
-5. **Ensemble Creation** (Optional)
+4. **Ensemble Creation** (Optional)
    - Filters models by R², MAPE, MAE, sign constraints
    - Weighted averaging of coefficients
-   - Applies RLS to ensemble model
 
 **Returns:**
 - `results_df` - Cross-validation results with metrics
 - `preds_df` - Predictions for all folds
-- `optimized_lambda_df` - Best lambda per group/model
 - `ensemble_df` - Ensemble model results (if enabled)
 
 ---
@@ -126,10 +111,10 @@ streamlit run app.py
 
 ```python
 # Import model classes
-from models import CustomConstrainedRidge, RecursiveLeastSquares
+from models import CustomConstrainedRidge
 
 # Import utilities
-from utils import safe_mape, apply_rls_on_holdout
+from utils import safe_mape
 
 # Import pipeline
 from pipeline import run_model_pipeline
@@ -143,21 +128,20 @@ from pipeline import run_model_pipeline
 - Linear Regression
 - Ridge, Lasso, ElasticNet
 - Bayesian Ridge
+- Recursive Least Squares (configurable λ and covariance)
 - Custom Constrained Ridge
 - Constrained Linear Regression
 - Mixed Effects Models
-- Recursive Least Squares
 
 ### 2. **Stacked Interaction Models**
 - Group-specific coefficients via interaction terms
 - Separate filtering vs. interaction keys
 - Automatic dummy variable creation
 
-### 3. **Recursive Least Squares (RLS)**
-- Time-series adaptation with forgetting factor
-- Warmup period for hyperparameter tuning
-- Frozen holdout testing (no data leakage)
-- Beta evolution tracking
+### 3. **Ensembles & Diagnostics**
+- Weighted averaging of eligible base models
+- Sign-based model filtering
+- Detailed metrics, coefficients, and download options
 
 ### 4. **Ensemble Modeling**
 - Weighted averaging across models
@@ -172,7 +156,7 @@ from pipeline import run_model_pipeline
 - Positive constraints (≥0)
 - Negative constraints (≤0)
 - Applied during gradient descent
-- Enforced in RLS updates
+- Enforced throughout model training
 
 ### 6. **Auto-Residualization**
 - Removes multicollinearity from product-specific variables

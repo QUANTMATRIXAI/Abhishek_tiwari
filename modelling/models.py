@@ -170,6 +170,160 @@ class ConstrainedLinearRegression(BaseEstimator, RegressorMixin):
         return X.dot(self.W) + self.b
 
 
+class RecursiveLeastSquaresRegressor(BaseEstimator, RegressorMixin):
+    """Recursive Least Squares estimator with optional forgetting factor.
+
+    Parameters
+    ----------
+    forgetting_factor : float, default=1.0
+        RLS forgetting factor λ in (0, 1]. Use <1.0 for exponential forgetting.
+    initial_covariance : float, default=1e4
+        Initial diagonal value for the covariance matrix P0 = initial_covariance * I.
+    fit_intercept : bool, default=True
+        If True, model includes an intercept term.
+    store_history : bool, default=False
+        If True, stores coefficient and intercept history after each update.
+    epsilon : float, default=1e-8
+        Small number to guard against division by zero in the gain computation.
+    """
+
+    def __init__(
+        self,
+        forgetting_factor: float = 1.0,
+        initial_covariance: float = 1e3,   # ↓ from 1e4
+        fit_intercept: bool = True,
+        store_history: bool = False,
+        epsilon: float = 1e-6,             # ↑ from 1e-8
+    ):
+
+
+        if not 0 < forgetting_factor <= 1:
+            raise ValueError("forgetting_factor must be in (0, 1]")
+        if initial_covariance <= 0:
+            raise ValueError("initial_covariance must be positive")
+
+        self.forgetting_factor = forgetting_factor
+        self.initial_covariance = initial_covariance
+        self.fit_intercept = fit_intercept
+        self.store_history = store_history
+        self.epsilon = epsilon
+
+    # --------------------------- public API ---------------------------
+
+    def fit(self, X, y):
+        X_array = self._prepare_features(X)
+        y_array = np.asarray(y, dtype=float).reshape(-1)
+
+        if X_array.shape[0] != y_array.shape[0]:
+            raise ValueError("X and y must have the same number of samples")
+
+        n_features = X_array.shape[1]
+        self._theta = np.zeros(n_features, dtype=float)
+        self._covariance = np.eye(n_features, dtype=float) * self.initial_covariance
+
+        if self.store_history:
+            self.coef_history_ = []
+            self.intercept_history_ = []
+
+        for i in range(X_array.shape[0]):
+            self._update_single(X_array[i], y_array[i])
+
+        self._synchronize_public_coefficients()
+        # sklearn nicety
+        self.n_features_in_ = n_features - (1 if self.fit_intercept else 0)
+        return self
+
+    def update(self, X_new, y_new):
+        """Online/batch update with new observations."""
+        if not hasattr(self, '_theta'):
+            raise RuntimeError("Model must be fitted before calling update().")
+
+        X_array = self._prepare_features(X_new)
+        y_array = np.asarray(y_new, dtype=float).reshape(-1)
+
+        if X_array.shape[0] != y_array.shape[0]:
+            raise ValueError("X_new and y_new must have the same number of samples")
+
+        for i in range(X_array.shape[0]):
+            self._update_single(X_array[i], y_array[i])
+
+        self._synchronize_public_coefficients()
+        return self
+
+    # Optional sklearn alias
+    def partial_fit(self, X, y):
+        return self.update(X, y)
+
+    def predict(self, X):
+        if not hasattr(self, 'coef_'):
+            raise RuntimeError("Model must be fitted before calling predict().")
+
+        X_array = np.asarray(X, dtype=float)
+        if X_array.ndim == 1:
+            # Be consistent with fit(): treat 1D as (n_samples, 1)
+            X_array = X_array.reshape(-1, 1)
+
+        expected = self.coef_.shape[0]
+        if X_array.shape[1] != expected:
+            raise ValueError(f"Expected {expected} features, got {X_array.shape[1]}")
+
+        if self.fit_intercept:
+            return X_array.dot(self.coef_) + self.intercept_
+        return X_array.dot(self.coef_)
+
+    # --------------------------- internals ---------------------------
+
+    def _prepare_features(self, X):
+        X_array = np.asarray(X, dtype=float)
+
+        if X_array.ndim == 1:
+            X_array = X_array.reshape(-1, 1)
+
+        if self.fit_intercept:
+            ones = np.ones((X_array.shape[0], 1), dtype=float)
+            X_array = np.hstack([ones, X_array])
+
+        if hasattr(self, '_theta') and X_array.shape[1] != len(self._theta):
+            raise ValueError(
+                "Incoming feature dimension does not match fitted model parameters"
+            )
+
+        return X_array
+
+    def _update_single(self, x_vec, y_val):
+        # Gain
+        px = self._covariance @ x_vec
+        denom = self.forgetting_factor + float(x_vec.dot(px))
+        if denom < self.epsilon:
+            denom = self.epsilon
+        gain = px / denom
+
+        # Update theta
+        residual = y_val - float(x_vec.dot(self._theta))
+        self._theta = self._theta + gain * residual
+
+        # Update covariance (Joseph form simplified for RLS)
+        self._covariance = (self._covariance - np.outer(gain, px)) / self.forgetting_factor
+        # Keep covariance symmetric (numerical hygiene)
+        self._covariance = 0.5 * (self._covariance + self._covariance.T)
+
+        # History (store post-update)
+        if self.store_history:
+            if self.fit_intercept:
+                self.intercept_history_.append(float(self._theta[0]))
+                self.coef_history_.append(self._theta[1:].copy())
+            else:
+                self.intercept_history_.append(0.0)
+                self.coef_history_.append(self._theta.copy())
+
+    def _synchronize_public_coefficients(self):
+        if self.fit_intercept:
+            self.intercept_ = float(self._theta[0])
+            self.coef_ = self._theta[1:].astype(float, copy=True)
+        else:
+            self.intercept_ = 0.0
+            self.coef_ = self._theta.astype(float, copy=True)
+
 class StackedInteractionModel(BaseEstimator, RegressorMixin):
     """Stacked model with interaction terms for group-specific coefficients"""
 
@@ -518,242 +672,3 @@ class StatsMixedEffectsModel(BaseEstimator, RegressorMixin):
                         y_pred[i] += self.random_effects_dict_[group]
 
                 return y_pred
-
-
-class RecursiveLeastSquares(BaseEstimator, RegressorMixin):
-    """
-    Recursive Least Squares with forgetting factor and constraints
-
-    Parameters:
-    -----------
-    forgetting_factor : float, default=0.99
-        Forgetting factor (0 < λ ≤ 1). Lower values give more weight to recent data.
-        Common values: 0.95-0.99
-    initial_P : float, default=1.0
-        Initial covariance matrix scaling (P = initial_P * I)
-        For standardized features, 1-100 is appropriate
-    non_negative_features : list, default=None
-        Feature names that must have non-negative (≥0) coefficients
-    non_positive_features : list, default=None
-        Feature names that must have non-positive (≤0) coefficients
-    """
-    def __init__(self, forgetting_factor=0.99, initial_P=1.0,
-                 non_negative_features=None, non_positive_features=None):
-        self.forgetting_factor = forgetting_factor
-        self.initial_P = initial_P
-        self.non_negative_features = non_negative_features or []
-        self.non_positive_features = non_positive_features or []
-
-        self.beta = None
-        self.coef_ = None
-        self.intercept_ = 0.0
-        self.P = None
-        self.n_features_ = None
-        self.beta_history_ = []
-        self.prediction_history_ = []
-        self.feature_names_ = None
-        self._non_negative_indices = []
-        self._non_positive_indices = []
-
-    def fit(self, X, y, feature_names=None, initial_beta=None, initial_intercept=None):
-        """
-        Initialize RLS with coefficients from another model (preferred) or OLS fallback
-        """
-        # Store feature names for constraint mapping
-        if isinstance(X, pd.DataFrame):
-            self.feature_names_ = X.columns.tolist()
-            X = X.values
-        elif feature_names is not None:
-            self.feature_names_ = feature_names
-
-        if not isinstance(X, np.ndarray):
-            X = np.array(X)
-        if not isinstance(y, np.ndarray):
-            y = np.array(y)
-
-        # Add intercept column
-        X_with_intercept = np.column_stack([np.ones(len(X)), X])
-        self.n_features_ = X.shape[1]
-
-        # Map constraint feature names to indices (1-indexed because of intercept)
-        if self.feature_names_:
-            self._non_negative_indices = [
-                i + 1 for i, name in enumerate(self.feature_names_)
-                if name in self.non_negative_features
-            ]
-            self._non_positive_indices = [
-                i + 1 for i, name in enumerate(self.feature_names_)
-                if name in self.non_positive_features
-            ]
-
-        # Use provided betas WITHOUT running RLS updates
-        if initial_beta is not None and initial_intercept is not None:
-            # Use the trained model's coefficients directly
-            self.beta = np.concatenate([[initial_intercept], initial_beta])
-
-        else:
-            # Fallback: Initialize with OLS on first few samples
-            init_size = min(10, len(X))
-            X_init = X_with_intercept[:init_size]
-            y_init = y[:init_size]
-
-            try:
-                XtX = X_init.T @ X_init
-                Xty = X_init.T @ y_init
-                beta_init = np.linalg.solve(XtX, Xty)
-            except np.linalg.LinAlgError:
-                beta_init = np.linalg.pinv(X_init) @ y_init
-
-            self.beta = beta_init.copy()
-
-            # Only run RLS updates if we used OLS initialization
-            for i in range(init_size, len(X)):
-                x_t = X_with_intercept[i]
-                y_t = y[i]
-                self._update(x_t, y_t)
-
-        # Apply constraints to initial beta
-        self._apply_constraints()
-
-        self.intercept_ = self.beta[0]
-        self.coef_ = self.beta[1:]
-
-        # Initialize covariance matrix P
-        try:
-            XtX = X_with_intercept.T @ X_with_intercept
-            n_params = XtX.shape[0]
-
-            # For pre-trained models, use smaller P for stability
-            if initial_beta is not None and initial_intercept is not None:
-                # Pre-trained model: Use inverse of data covariance for more stable updates
-                regularization = 0.01 * np.eye(n_params)
-                self.P = np.linalg.inv(XtX / len(X) + regularization)
-            else:
-                # Fresh start: Use larger P for faster learning
-                self.P = self.initial_P * np.eye(n_params)
-
-        except np.linalg.LinAlgError:
-            self.P = self.initial_P * np.eye(len(self.beta))
-
-        # Store initial state
-        self.beta_history_ = [self.beta.copy()]
-
-        return self
-
-
-    def _apply_constraints(self):
-        """Apply non-negative and non-positive constraints to beta coefficients"""
-        for idx in self._non_negative_indices:
-            if self.beta[idx] < 0:
-                self.beta[idx] = 0.0
-
-        for idx in self._non_positive_indices:
-            if self.beta[idx] > 0:
-                self.beta[idx] = 0.0
-
-    def _update(self, x_t, y_t):
-        """
-        Internal method to update beta with a single observation
-
-        Parameters:
-        -----------
-        x_t : np.ndarray
-            Single observation with intercept [1, x1, x2, ...]
-        y_t : float
-            Target value for this observation
-        """
-        x_t_col = x_t.reshape(-1, 1)
-
-        # Prediction error
-        y_pred = x_t @ self.beta
-        error = y_t - y_pred
-
-        # RLS update: K = P @ x / (λ + x.T @ P @ x)
-        P_x = self.P @ x_t_col
-        denominator = self.forgetting_factor + (x_t_col.T @ self.P @ x_t_col)[0, 0]
-        denominator = max(denominator, 1e-8)  # Numerical stability
-        K = P_x / denominator
-
-        # Update beta: beta = beta + K * error
-        beta_update = (K * error).flatten()
-
-        # Clip extremely large updates
-        max_update = 10.0
-        if np.abs(beta_update).max() > max_update:
-            beta_update = np.clip(beta_update, -max_update, max_update)
-
-        self.beta += beta_update
-
-        # Clip beta values to prevent explosion
-        max_beta = 1000.0
-        if np.abs(self.beta).max() > max_beta:
-            self.beta = np.clip(self.beta, -max_beta, max_beta)
-
-        # Apply constraints
-        self._apply_constraints()
-
-        # Update P matrix: P_new = (1/λ) * (P - K @ x.T @ P)
-        P_new = (1.0 / self.forgetting_factor) * self.P
-        P_new = P_new - K @ (x_t_col.T @ P_new)
-
-        # Numerical stability
-        max_P_value = 100.0
-        P_new = np.clip(P_new, -max_P_value, max_P_value)
-        P_new = P_new + 0.01 * np.eye(len(P_new))
-        self.P = P_new
-
-        # Track history
-        self.beta_history_.append(self.beta.copy())
-        self.prediction_history_.append(y_pred)
-
-        # Update intercept and coefficients
-        self.intercept_ = self.beta[0]
-        self.coef_ = self.beta[1:]
-
-    def update(self, X, y):
-        """
-        Update RLS coefficients with new observation(s) without returning prediction
-        """
-        if not isinstance(X, np.ndarray):
-            X = np.array(X)
-        if not isinstance(y, np.ndarray):
-            y = np.array(y)
-
-        for i in range(len(X)):
-            x_t = np.concatenate([[1], X[i]])
-            y_t = y[i]
-            self._update(x_t, y_t)
-
-    def predict(self, X):
-        """Predict using current beta estimates"""
-        if not isinstance(X, np.ndarray):
-            X = np.array(X)
-
-        X_with_intercept = np.column_stack([np.ones(len(X)), X])
-        return X_with_intercept @ self.beta
-
-    def update_and_predict(self, X, y):
-        """
-        Update model with new data and return predictions
-        Returns predictions BEFORE updating (true out-of-sample)
-        """
-        if not isinstance(X, np.ndarray):
-            X = np.array(X)
-        if not isinstance(y, np.ndarray):
-            y = np.array(y)
-
-        predictions = []
-
-        for i in range(len(X)):
-            x_t = np.concatenate([[1], X[i]])
-            y_pred = x_t @ self.beta
-            predictions.append(y_pred)
-
-            # Update with actual observation
-            self._update(x_t, y[i])
-
-        return np.array(predictions)
-
-    def get_beta_history(self):
-        """Return history of beta estimates"""
-        return np.array(self.beta_history_)

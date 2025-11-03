@@ -1,185 +1,19 @@
 """
 Utility Functions for Modelling Module
 
-This module provides helper functions for model validation, ensemble creation,
-and recursive least squares (RLS) operations.
+This module provides helper functions for model validation and ensemble creation.
 
 Key Functions:
 --------------
-- apply_rls_on_holdout: Apply RLS with warmup period before holdout testing
-- validate_rls_data_splits: Validate that RLS data splits are correct and non-overlapping
 - safe_mape: Calculate MAPE safely with automatic protection against small values
 - build_weighted_ensemble_model: Build weighted ensemble by averaging coefficients
 - create_ensemble_model_from_results: Create ensemble models from CV results
-
-Constants:
-----------
-- DEFAULT_RLS_LAMBDA_GRID: Default grid of RLS forgetting factors
 """
 
 import numpy as np
 import pandas as pd
 import streamlit as st
-from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 
-from models import RecursiveLeastSquares
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# RLS FUNCTIONS
-# ═══════════════════════════════════════════════════════════════════════════
-
-def apply_rls_on_holdout(trained_model, X_train, y_train,
-                         X_warmup, y_warmup,
-                         X_holdout, y_holdout,
-                         feature_names, forgetting_factor,
-                         nonnegative_features=None, nonpositive_features=None,
-                         initial_beta=None, initial_intercept=None):
-    """
-    Apply RLS with warmup period before holdout testing
-
-    Parameters:
-    -----------
-    trained_model : model object or None
-        If provided, extract initial betas from this model
-    initial_beta : array-like, optional
-        Initial beta coefficients (overrides trained_model if provided)
-    initial_intercept : float, optional
-        Initial intercept (overrides trained_model if provided)
-    """
-    # Create RLS model
-    rls_model = RecursiveLeastSquares(
-        forgetting_factor=forgetting_factor,
-        initial_P=1.0,  # REDUCED for stability with pre-trained models
-        non_negative_features=nonnegative_features,
-        non_positive_features=nonpositive_features
-    )
-
-    # Get initial beta: use provided params, or extract from trained model
-    if initial_beta is None or initial_intercept is None:
-        if trained_model is not None:
-            if hasattr(trained_model, 'coef_'):
-                initial_beta = trained_model.coef_
-                initial_intercept = trained_model.intercept_ if hasattr(trained_model, 'intercept_') else 0.0
-            elif hasattr(trained_model, 'W'):
-                initial_beta = trained_model.W
-                initial_intercept = trained_model.b if hasattr(trained_model, 'b') else 0.0
-
-    # Initialize RLS with betas from week 44 model (or ensemble betas)
-    rls_model.fit(X_train, y_train, feature_names=feature_names,
-                  initial_beta=initial_beta, initial_intercept=initial_intercept)
-
-    # NOTE: P matrix is already initialized in fit() method, no need to reinitialize
-
-    # Store initial state (after training on 1-44, before warmup)
-    initial_beta_state = rls_model.beta.copy()
-
-    # ═══════════════════════════════════════════════════════════════
-    # WARMUP PHASE: Predict AND update on weeks 45-48
-    # ═══════════════════════════════════════════════════════════════
-    warmup_predictions = []
-    warmup_beta_snapshots = [initial_beta_state.copy()]  # Start with week 44 betas
-
-    if len(X_warmup) > 0:
-        for i in range(len(X_warmup)):
-            # Predict BEFORE update
-            y_pred_warmup = rls_model.predict(X_warmup[i:i+1])[0]
-            warmup_predictions.append(y_pred_warmup)
-
-            # Update with actual
-            rls_model.update(X_warmup[i:i+1], y_warmup[i:i+1])
-
-            # Store beta after this warmup update
-            warmup_beta_snapshots.append(rls_model.beta.copy())
-
-    # Store warmed-up state (after week 48, before testing on 49-52)
-    warmed_beta_state = rls_model.beta.copy()
-
-    # ═══════════════════════════════════════════════════════════════
-    # HOLDOUT PHASE: Predict with FROZEN betas (NO updates) on weeks 49-52
-    # ═══════════════════════════════════════════════════════════════
-    holdout_predictions = []
-    holdout_beta_snapshots = [warmed_beta_state.copy()]  # Start with warmed-up betas
-
-    # CRITICAL VERIFICATION: Store beta before holdout to ensure no changes
-    beta_before_holdout = rls_model.beta.copy()
-
-    for i in range(len(X_holdout)):
-        # Predict with frozen betas
-        y_pred = rls_model.predict(X_holdout[i:i+1])[0]
-        holdout_predictions.append(y_pred)
-
-        # NO UPDATE during holdout - betas must remain frozen
-        # This is critical for proper out-of-sample testing
-
-        # Verify betas haven't changed (safety check)
-        if not np.allclose(rls_model.beta, beta_before_holdout):
-            raise ValueError("CRITICAL ERROR: Beta coefficients changed during holdout period!")
-
-        # Store beta (same as warmed state, verified no change)
-        holdout_beta_snapshots.append(rls_model.beta.copy())
-
-    # Calculate metrics on holdout period only
-    actuals_holdout = y_holdout
-    preds_holdout = np.array(holdout_predictions)
-
-    # Calculate metrics on warmup period (for tracking)
-    actuals_warmup = y_warmup if len(warmup_predictions) > 0 else np.array([])
-    preds_warmup = np.array(warmup_predictions) if len(warmup_predictions) > 0 else np.array([])
-
-    return {
-        # Holdout predictions and metrics
-        'predictions': preds_holdout,
-        'R2_Holdout': r2_score(actuals_holdout, preds_holdout),
-        'MAE_Holdout': mean_absolute_error(actuals_holdout, preds_holdout),
-        'MSE_Holdout': mean_squared_error(actuals_holdout, preds_holdout),
-        'RMSE_Holdout': np.sqrt(mean_squared_error(actuals_holdout, preds_holdout)),
-        'MAPE_Holdout': safe_mape(actuals_holdout, preds_holdout),
-
-        # Warmup predictions (NEW)
-        'warmup_predictions': preds_warmup,
-        'warmup_actuals': actuals_warmup,
-
-        # Beta history (ENHANCED)
-        'beta_history': {
-            'feature_names': ['Intercept'] + list(feature_names),
-            'warmup_beta_snapshots': warmup_beta_snapshots,  # Betas during warmup
-            'holdout_beta_snapshots': holdout_beta_snapshots,  # Betas during holdout
-            'n_warmup': len(X_warmup),
-            'n_holdout': len(X_holdout)
-        },
-
-        'final_betas': rls_model.coef_,
-        'final_intercept': rls_model.intercept_
-    }
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# HELPER FUNCTIONS
-# ═══════════════════════════════════════════════════════════════════════════
-
-def validate_rls_data_splits(train_df, warmup_df, holdout_df, total_weeks=52):
-    """
-    Validate that RLS data splits are correct and non-overlapping
-    """
-    n_train = len(train_df)
-    n_warmup = len(warmup_df)
-    n_holdout = len(holdout_df)
-    n_total = n_train + n_warmup + n_holdout
-
-    # Check for expected weeks
-    if total_weeks is not None and n_total != total_weeks:
-        print(f"WARNING: Expected {total_weeks} weeks, got {n_total}")
-
-    # Check for non-overlapping indices
-    if not train_df.index.intersection(warmup_df.index).empty:
-        raise ValueError("Data leakage: Training and warmup sets overlap!")
-    if not train_df.index.intersection(holdout_df.index).empty:
-        raise ValueError("Data leakage: Training and holdout sets overlap!")
-    if not warmup_df.index.intersection(holdout_df.index).empty:
-        raise ValueError("Data leakage: Warmup and holdout sets overlap!")
-
-    return True
 
 def safe_mape(y_true, y_pred):
     """
@@ -206,10 +40,6 @@ def safe_mape(y_true, y_pred):
     percent_errors = np.minimum(percent_errors, 500.0)
 
     return np.mean(percent_errors)
-
-# Default grid of RLS forgetting factors for automatic tuning
-# FIXED: Use higher values (less forgetting) for more stable updates
-DEFAULT_RLS_LAMBDA_GRID = [0.95, 0.96, 0.97, 0.98, 0.99, 0.995, 0.999, 1.0]
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -354,7 +184,6 @@ def create_ensemble_model_from_results(results_df, grouping_keys, feature_names,
                 beta_col = f"Beta_{feature}"
                 if beta_col in avg_results.columns:
                     beta_values = pd.to_numeric(avg_results[beta_col], errors='coerce')
-                    # Keep only models where this coefficient is >= 0 (with small tolerance for numerical errors)
                     mask &= (beta_values >= -1e-6)
 
         # Check negative constraints
@@ -363,7 +192,6 @@ def create_ensemble_model_from_results(results_df, grouping_keys, feature_names,
                 beta_col = f"Beta_{feature}"
                 if beta_col in avg_results.columns:
                     beta_values = pd.to_numeric(avg_results[beta_col], errors='coerce')
-                    # Keep only models where this coefficient is <= 0 (with small tolerance for numerical errors)
                     mask &= (beta_values <= 1e-6)
 
         avg_results = avg_results[mask]
@@ -380,11 +208,9 @@ def create_ensemble_model_from_results(results_df, grouping_keys, feature_names,
     ensembles = {}
 
     if not grouping_keys:
-        # Single group case
         ensemble = build_weighted_ensemble_model(avg_results, weight_metric, grouping_keys)
         ensembles['ALL'] = ensemble
     else:
-        # Group by combination keys
         for combo_vals, group_df in avg_results.groupby(grouping_keys, dropna=False):
             if len(group_df) == 0:
                 continue
