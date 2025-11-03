@@ -171,10 +171,32 @@ class ConstrainedLinearRegression(BaseEstimator, RegressorMixin):
 
 
 class RecursiveLeastSquaresRegressor(BaseEstimator, RegressorMixin):
-    """Recursive Least Squares estimator with optional forgetting factor."""
+    """Recursive Least Squares estimator with optional forgetting factor.
 
-    def __init__(self, forgetting_factor=1.0, initial_covariance=1e4,
-                 fit_intercept=True, store_history=False, epsilon=1e-8):
+    Parameters
+    ----------
+    forgetting_factor : float, default=1.0
+        RLS forgetting factor λ in (0, 1]. Use <1.0 for exponential forgetting.
+    initial_covariance : float, default=1e4
+        Initial diagonal value for the covariance matrix P0 = initial_covariance * I.
+    fit_intercept : bool, default=True
+        If True, model includes an intercept term.
+    store_history : bool, default=False
+        If True, stores coefficient and intercept history after each update.
+    epsilon : float, default=1e-8
+        Small number to guard against division by zero in the gain computation.
+    """
+
+    def __init__(
+        self,
+        forgetting_factor: float = 1.0,
+        initial_covariance: float = 1e3,   # ↓ from 1e4
+        fit_intercept: bool = True,
+        store_history: bool = False,
+        epsilon: float = 1e-6,             # ↑ from 1e-8
+    ):
+
+
         if not 0 < forgetting_factor <= 1:
             raise ValueError("forgetting_factor must be in (0, 1]")
         if initial_covariance <= 0:
@@ -186,6 +208,8 @@ class RecursiveLeastSquaresRegressor(BaseEstimator, RegressorMixin):
         self.store_history = store_history
         self.epsilon = epsilon
 
+    # --------------------------- public API ---------------------------
+
     def fit(self, X, y):
         X_array = self._prepare_features(X)
         y_array = np.asarray(y, dtype=float).reshape(-1)
@@ -194,8 +218,8 @@ class RecursiveLeastSquaresRegressor(BaseEstimator, RegressorMixin):
             raise ValueError("X and y must have the same number of samples")
 
         n_features = X_array.shape[1]
-        self._theta = np.zeros(n_features)
-        self._covariance = np.eye(n_features) * self.initial_covariance
+        self._theta = np.zeros(n_features, dtype=float)
+        self._covariance = np.eye(n_features, dtype=float) * self.initial_covariance
 
         if self.store_history:
             self.coef_history_ = []
@@ -205,9 +229,12 @@ class RecursiveLeastSquaresRegressor(BaseEstimator, RegressorMixin):
             self._update_single(X_array[i], y_array[i])
 
         self._synchronize_public_coefficients()
+        # sklearn nicety
+        self.n_features_in_ = n_features - (1 if self.fit_intercept else 0)
         return self
 
     def update(self, X_new, y_new):
+        """Online/batch update with new observations."""
         if not hasattr(self, '_theta'):
             raise RuntimeError("Model must be fitted before calling update().")
 
@@ -223,15 +250,28 @@ class RecursiveLeastSquaresRegressor(BaseEstimator, RegressorMixin):
         self._synchronize_public_coefficients()
         return self
 
+    # Optional sklearn alias
+    def partial_fit(self, X, y):
+        return self.update(X, y)
+
     def predict(self, X):
         if not hasattr(self, 'coef_'):
             raise RuntimeError("Model must be fitted before calling predict().")
 
         X_array = np.asarray(X, dtype=float)
+        if X_array.ndim == 1:
+            # Be consistent with fit(): treat 1D as (n_samples, 1)
+            X_array = X_array.reshape(-1, 1)
+
+        expected = self.coef_.shape[0]
+        if X_array.shape[1] != expected:
+            raise ValueError(f"Expected {expected} features, got {X_array.shape[1]}")
 
         if self.fit_intercept:
             return X_array.dot(self.coef_) + self.intercept_
         return X_array.dot(self.coef_)
+
+    # --------------------------- internals ---------------------------
 
     def _prepare_features(self, X):
         X_array = np.asarray(X, dtype=float)
@@ -240,7 +280,7 @@ class RecursiveLeastSquaresRegressor(BaseEstimator, RegressorMixin):
             X_array = X_array.reshape(-1, 1)
 
         if self.fit_intercept:
-            ones = np.ones((X_array.shape[0], 1))
+            ones = np.ones((X_array.shape[0], 1), dtype=float)
             X_array = np.hstack([ones, X_array])
 
         if hasattr(self, '_theta') and X_array.shape[1] != len(self._theta):
@@ -251,20 +291,26 @@ class RecursiveLeastSquaresRegressor(BaseEstimator, RegressorMixin):
         return X_array
 
     def _update_single(self, x_vec, y_val):
+        # Gain
         px = self._covariance @ x_vec
-        denom = self.forgetting_factor + x_vec.dot(px)
-
+        denom = self.forgetting_factor + float(x_vec.dot(px))
         if denom < self.epsilon:
             denom = self.epsilon
-
         gain = px / denom
-        residual = y_val - x_vec.dot(self._theta)
-        self._theta = self._theta + gain * residual
-        self._covariance = (self._covariance - np.outer(gain, px)) / self.forgetting_factor
 
+        # Update theta
+        residual = y_val - float(x_vec.dot(self._theta))
+        self._theta = self._theta + gain * residual
+
+        # Update covariance (Joseph form simplified for RLS)
+        self._covariance = (self._covariance - np.outer(gain, px)) / self.forgetting_factor
+        # Keep covariance symmetric (numerical hygiene)
+        self._covariance = 0.5 * (self._covariance + self._covariance.T)
+
+        # History (store post-update)
         if self.store_history:
             if self.fit_intercept:
-                self.intercept_history_.append(self._theta[0])
+                self.intercept_history_.append(float(self._theta[0]))
                 self.coef_history_.append(self._theta[1:].copy())
             else:
                 self.intercept_history_.append(0.0)
@@ -273,10 +319,10 @@ class RecursiveLeastSquaresRegressor(BaseEstimator, RegressorMixin):
     def _synchronize_public_coefficients(self):
         if self.fit_intercept:
             self.intercept_ = float(self._theta[0])
-            self.coef_ = self._theta[1:].astype(float)
+            self.coef_ = self._theta[1:].astype(float, copy=True)
         else:
             self.intercept_ = 0.0
-            self.coef_ = self._theta.astype(float)
+            self.coef_ = self._theta.astype(float, copy=True)
 
 class StackedInteractionModel(BaseEstimator, RegressorMixin):
     """Stacked model with interaction terms for group-specific coefficients"""
