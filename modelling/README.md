@@ -39,12 +39,17 @@ Contains all custom model implementations:
    - Gradient descent with constraints
    - Adam optimizer support
 
-3. **`StackedInteractionModel`** - Group-specific coefficient modeling
+3. **`RecursiveLeastSquaresRegressor`** - Sequential coefficient updating
+   - Standard RLS with configurable forgetting factor
+   - Supports optional coefficient history tracking
+   - Provides incremental `update()` method for streaming data
+
+4. **`StackedInteractionModel`** - Group-specific coefficient modeling
    - Creates interaction terms for each group
    - Dummy variable encoding
    - Extracts per-group coefficients
 
-4. **`StatsMixedEffectsModel`** - Wrapper for statsmodels MixedLM
+5. **`StatsMixedEffectsModel`** - Wrapper for statsmodels MixedLM
    - Random effects per group
    - Fallback to LinearRegression if mixed effects fail
    - Minimum group size filtering
@@ -123,6 +128,7 @@ from pipeline import run_model_pipeline
 - Linear Regression
 - Ridge, Lasso, ElasticNet
 - Bayesian Ridge
+- Recursive Least Squares (configurable λ and covariance)
 - Custom Constrained Ridge
 - Constrained Linear Regression
 - Mixed Effects Models

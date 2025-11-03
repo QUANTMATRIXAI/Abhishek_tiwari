@@ -26,6 +26,7 @@ from sklearn.metrics import r2_score
 from models import (
     CustomConstrainedRidge,
     ConstrainedLinearRegression,
+    RecursiveLeastSquaresRegressor,
     StackedInteractionModel,
     StatsMixedEffectsModel
 )
@@ -445,6 +446,37 @@ def main():
 
     st.markdown("---")
 
+    # RLS configuration
+    with st.expander("🔄 Recursive Least Squares Settings", expanded=False):
+        st.caption("Configure how the RLS model updates coefficients over time.")
+        col_rls1, col_rls2 = st.columns(2)
+
+        with col_rls1:
+            rls_forgetting = st.slider(
+                "Forgetting Factor (λ)",
+                min_value=0.80,
+                max_value=1.00,
+                value=0.99,
+                step=0.01,
+                help="Controls how quickly older observations are discounted. 1.0 = no forgetting"
+            )
+
+        with col_rls2:
+            rls_initial_cov = st.number_input(
+                "Initial Covariance",
+                min_value=1.0,
+                max_value=1e6,
+                value=1000.0,
+                step=100.0,
+                help="Larger values allow larger coefficient adjustments during early updates"
+            )
+
+        rls_store_history = st.checkbox(
+            "Store coefficient history",
+            value=False,
+            help="Track coefficient updates after each observation (useful for diagnostics)"
+        )
+
     # Model selection
     st.subheader("5️⃣ Select Models")
 
@@ -454,6 +486,11 @@ def main():
         "Lasso Regression": Lasso(alpha=0.1),
         "ElasticNet Regression": ElasticNet(alpha=0.1, l1_ratio=0.5),
         "Bayesian Ridge": BayesianRidge(),
+        "Recursive Least Squares": RecursiveLeastSquaresRegressor(
+            forgetting_factor=rls_forgetting,
+            initial_covariance=rls_initial_cov,
+            store_history=rls_store_history
+        ),
         "Custom Constrained Ridge": CustomConstrainedRidge(
             l2_penalty=0.1,
             learning_rate=0.001,

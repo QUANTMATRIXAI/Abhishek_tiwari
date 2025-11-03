@@ -170,6 +170,114 @@ class ConstrainedLinearRegression(BaseEstimator, RegressorMixin):
         return X.dot(self.W) + self.b
 
 
+class RecursiveLeastSquaresRegressor(BaseEstimator, RegressorMixin):
+    """Recursive Least Squares estimator with optional forgetting factor."""
+
+    def __init__(self, forgetting_factor=1.0, initial_covariance=1e4,
+                 fit_intercept=True, store_history=False, epsilon=1e-8):
+        if not 0 < forgetting_factor <= 1:
+            raise ValueError("forgetting_factor must be in (0, 1]")
+        if initial_covariance <= 0:
+            raise ValueError("initial_covariance must be positive")
+
+        self.forgetting_factor = forgetting_factor
+        self.initial_covariance = initial_covariance
+        self.fit_intercept = fit_intercept
+        self.store_history = store_history
+        self.epsilon = epsilon
+
+    def fit(self, X, y):
+        X_array = self._prepare_features(X)
+        y_array = np.asarray(y, dtype=float).reshape(-1)
+
+        if X_array.shape[0] != y_array.shape[0]:
+            raise ValueError("X and y must have the same number of samples")
+
+        n_features = X_array.shape[1]
+        self._theta = np.zeros(n_features)
+        self._covariance = np.eye(n_features) * self.initial_covariance
+
+        if self.store_history:
+            self.coef_history_ = []
+            self.intercept_history_ = []
+
+        for i in range(X_array.shape[0]):
+            self._update_single(X_array[i], y_array[i])
+
+        self._synchronize_public_coefficients()
+        return self
+
+    def update(self, X_new, y_new):
+        if not hasattr(self, '_theta'):
+            raise RuntimeError("Model must be fitted before calling update().")
+
+        X_array = self._prepare_features(X_new)
+        y_array = np.asarray(y_new, dtype=float).reshape(-1)
+
+        if X_array.shape[0] != y_array.shape[0]:
+            raise ValueError("X_new and y_new must have the same number of samples")
+
+        for i in range(X_array.shape[0]):
+            self._update_single(X_array[i], y_array[i])
+
+        self._synchronize_public_coefficients()
+        return self
+
+    def predict(self, X):
+        if not hasattr(self, 'coef_'):
+            raise RuntimeError("Model must be fitted before calling predict().")
+
+        X_array = np.asarray(X, dtype=float)
+
+        if self.fit_intercept:
+            return X_array.dot(self.coef_) + self.intercept_
+        return X_array.dot(self.coef_)
+
+    def _prepare_features(self, X):
+        X_array = np.asarray(X, dtype=float)
+
+        if X_array.ndim == 1:
+            X_array = X_array.reshape(-1, 1)
+
+        if self.fit_intercept:
+            ones = np.ones((X_array.shape[0], 1))
+            X_array = np.hstack([ones, X_array])
+
+        if hasattr(self, '_theta') and X_array.shape[1] != len(self._theta):
+            raise ValueError(
+                "Incoming feature dimension does not match fitted model parameters"
+            )
+
+        return X_array
+
+    def _update_single(self, x_vec, y_val):
+        px = self._covariance @ x_vec
+        denom = self.forgetting_factor + x_vec.dot(px)
+
+        if denom < self.epsilon:
+            denom = self.epsilon
+
+        gain = px / denom
+        residual = y_val - x_vec.dot(self._theta)
+        self._theta = self._theta + gain * residual
+        self._covariance = (self._covariance - np.outer(gain, px)) / self.forgetting_factor
+
+        if self.store_history:
+            if self.fit_intercept:
+                self.intercept_history_.append(self._theta[0])
+                self.coef_history_.append(self._theta[1:].copy())
+            else:
+                self.intercept_history_.append(0.0)
+                self.coef_history_.append(self._theta.copy())
+
+    def _synchronize_public_coefficients(self):
+        if self.fit_intercept:
+            self.intercept_ = float(self._theta[0])
+            self.coef_ = self._theta[1:].astype(float)
+        else:
+            self.intercept_ = 0.0
+            self.coef_ = self._theta.astype(float)
+
 class StackedInteractionModel(BaseEstimator, RegressorMixin):
     """Stacked model with interaction terms for group-specific coefficients"""
 
