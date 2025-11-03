@@ -8,7 +8,6 @@ The application supports:
 - Multiple regression models (Linear, Ridge, Lasso, ElasticNet, Bayesian, Custom Constrained)
 - Group-specific modeling with stacking
 - Coefficient constraints (positive/negative)
-- Recursive Least Squares (RLS) for adaptive modeling
 - Model ensembling with weighted averaging
 - Auto-residualization for handling multicollinearity
 - Time series visualization and comparison
@@ -28,11 +27,10 @@ from models import (
     CustomConstrainedRidge,
     ConstrainedLinearRegression,
     StackedInteractionModel,
-    StatsMixedEffectsModel,
-    RecursiveLeastSquares
+    StatsMixedEffectsModel
 )
 from pipeline import run_model_pipeline
-from utils import DEFAULT_RLS_LAMBDA_GRID, safe_mape
+from utils import safe_mape
 
 warnings.filterwarnings('ignore')
 
@@ -74,6 +72,9 @@ def main():
     if st.session_state.data is None:
         st.info("👆 Upload a file to begin")
         return
+
+    # Always work off the most recent dataframe stored in session state
+    df = st.session_state.data
 
     st.markdown("---")
 
@@ -444,46 +445,6 @@ def main():
 
     st.markdown("---")
 
-    # RLS Settings
-    with st.expander("🔄 Recursive Least Squares (RLS) Settings", expanded=False):
-        st.caption("RLS continuously updates model parameters as new data arrives")
-
-        col_rls1, col_rls2 = st.columns(2)
-
-        with col_rls1:
-            enable_rls = st.checkbox(
-                "Enable RLS",
-                value=False,
-                help="Recursive Least Squares with automated forgetting factor tuning"
-            )
-
-        with col_rls2:
-            warmup_weeks = st.number_input(
-                "Warmup Weeks:",
-                min_value=0,
-                max_value=20,
-                value=4,
-                step=1,
-                help="Weeks for RLS to adapt before holdout testing. RLS updates on these weeks without scoring."
-            )
-
-        holdout_weeks = st.number_input(
-            "Holdout Weeks for Testing:",
-            min_value=1,
-            max_value=20,
-            value=4,
-            step=1,
-            help="Number of recent weeks to hold out for testing RLS vs static predictions"
-        )
-
-        st.caption("📋 Forgetting factor is selected automatically per model to minimize holdout MAE.")
-        st.caption(f"📋 Split: Train on weeks 1-{f'N-{holdout_weeks}-{warmup_weeks}' if warmup_weeks > 0 else f'N-{holdout_weeks}'}, "
-                f"warmup on weeks {f'N-{holdout_weeks}-{warmup_weeks}+1 to N-{holdout_weeks}' if warmup_weeks > 0 else 'none'}, "
-                f"test on last {holdout_weeks} weeks")
-
-
-    st.markdown("---")
-
     # Model selection
     st.subheader("5️⃣ Select Models")
 
@@ -516,11 +477,8 @@ def main():
             if st.checkbox(model_name, value=(idx < 3), key=f"model_{idx}"):
                 selected_models.append(model_name)
 
-    # Apply RLS to selected models if enabled
-    models_to_run = {}
-    for model_name in selected_models:
-        # Just use base model
-        models_to_run[model_name] = base_models[model_name]
+    # Collect selected models
+    models_to_run = {model_name: base_models[model_name] for model_name in selected_models}
 
     # Add stacked versions
     if use_stacked and stacking_keys:
@@ -543,14 +501,11 @@ def main():
     base_count = len(selected_models)
     stacked_count = sum(1 for k in models_to_run.keys() if k.startswith('Stacked'))
 
-    if enable_rls:
-        st.info(f"📊 Will run **{len(models_to_run)}** model variants: "
-                f"{base_count} base models (with RLS updates)" +
-                (f" + {stacked_count} stacked" if stacked_count > 0 else ""))
-    else:
-        st.info(f"📊 Will run **{len(models_to_run)}** model variants: "
-                f"{base_count} base models" +
-                (f" + {stacked_count} stacked" if stacked_count > 0 else ""))
+    st.info(
+        f"📊 Will run **{len(models_to_run)}** model variants: "
+        f"{base_count} base models" +
+        (f" + {stacked_count} stacked" if stacked_count > 0 else "")
+    )
 
     st.markdown("---")
 
@@ -656,11 +611,9 @@ def main():
         # ═══════════════════════════════════════════════════════════════
         # Initialize stores (clear old data from previous runs)
         # ═══════════════════════════════════════════════════════════════
-        st.session_state.rls_comparison_store = []
         st.session_state.beta_history_store = {}
 
         # Store flags in session state so they're available in display section
-        st.session_state.enable_rls_flag = enable_rls
         st.session_state.enable_ensemble_flag = enable_ensemble
 
         # Use the working dataframe (either residualized or original)
@@ -668,12 +621,8 @@ def main():
         predictors_to_use = selected_predictors_working
 
         # Show workflow info
-        if enable_ensemble and enable_rls:
-            st.info("🔄 **Workflow**: CV on all models → Create ensemble → Apply RLS to ensemble only (train → warmup → holdout)")
-        elif enable_ensemble:
+        if enable_ensemble:
             st.info("🔄 **Workflow**: CV on all models → Create weighted ensemble")
-        elif enable_rls:
-            st.info("🔄 **Workflow**: CV on all models → Apply RLS to each model individually (train → warmup → holdout)")
 
         with st.spinner("Running models..."):
             st.session_state.optimized_lambdas = None
@@ -690,12 +639,6 @@ def main():
                 filter_keys_for_stacking=filter_keys_for_stacking,
                 log_transform_y=log_transform_y,
                 min_y_share_pct=min_y_share_pct,
-                enable_rls=enable_rls,
-                holdout_weeks=holdout_weeks,
-                warmup_weeks=warmup_weeks,
-                positive_constraints=positive_constraints,
-                negative_constraints=negative_constraints,
-                rls_lambda_candidates=DEFAULT_RLS_LAMBDA_GRID if enable_rls else None,
                 enable_ensemble=enable_ensemble,
                 ensemble_weight_metric=ensemble_weight_metric,
                 ensemble_filter_r2_min=ensemble_r2_min if use_r2_filter else None,
@@ -710,13 +653,6 @@ def main():
                 st.session_state.predictions = predictions_df
                 st.session_state.optimized_lambdas = lambda_df
                 st.session_state.ensemble_results = ensemble_df
-
-                # Show success message with store counts
-                if enable_rls:
-                    n_comparisons = len(st.session_state.get('rls_comparison_store', []))
-                    n_beta_histories = len(st.session_state.get('beta_history_store', {}))
-                    if n_comparisons > 0 or n_beta_histories > 0:
-                        st.success(f"✅ RLS Analysis Complete: {n_comparisons} comparisons, {n_beta_histories} beta histories stored")
 
 
     # Display results
@@ -739,19 +675,6 @@ def main():
             key='download_model_results'
         )
 
-        optimized_df = st.session_state.get('optimized_lambdas')
-        if optimized_df is not None and not optimized_df.empty:
-            with st.expander("🔧 Optimized RLS forgetting factors", expanded=False):
-                st.caption("Best lambda chosen per model/group combination based on holdout MAE")
-                st.dataframe(optimized_df, use_container_width=True, height=min(400, 100 + len(optimized_df) * 22))
-                csv_lambdas = optimized_df.to_csv(index=False).encode('utf-8')
-                st.download_button(
-                    label="📥 Download Lambda Table",
-                    data=csv_lambdas,
-                    file_name="optimized_rls_lambdas.csv",
-                    mime="text/csv",
-                    key='download_lambda_results'
-                )
 
         # Display ensemble results
         ensemble_df = st.session_state.get('ensemble_results')
@@ -913,60 +836,15 @@ def main():
                     # Get color
                     color = colors[idx % len(colors)]
 
-                    # Check if this is an RLS model with holdout predictions
-                    is_rls_model = '+ RLS' in model
-
-                    if is_rls_model and 'Fold' in predictions_df.columns:
-                        # Get holdout dates
-                        model_preds = predictions_df[predictions_df['Model'] == model].copy()
-                        holdout_dates = model_preds[model_preds['Fold'] == 'Holdout'][selected_date_col].unique()
-
-                        if len(holdout_dates) > 0:
-                            # Create marker properties: circles for training, diamonds for holdout
-                            model_data['marker_symbol'] = model_data[selected_date_col].apply(
-                                lambda x: 'diamond' if x in holdout_dates else 'circle'
-                            )
-                            model_data['marker_size'] = model_data[selected_date_col].apply(
-                                lambda x: 12 if x in holdout_dates else 6
-                            )
-
-                            # Single continuous trace with variable markers
-                            fig.add_trace(go.Scatter(
-                                x=model_data[selected_date_col],
-                                y=model_data['Predicted'],
-                                mode='lines+markers',
-                                name=f'{model} (R²={r2:.3f})',
-                                line=dict(color=color, width=2, dash='dash'),
-                                marker=dict(
-                                    size=model_data['marker_size'].tolist(),
-                                    symbol=model_data['marker_symbol'].tolist(),
-                                    color=color,
-                                    line=dict(width=1, color='white')
-                                ),
-                                hovertemplate=f'<b>{model}</b><br>Date: %{{x}}<br>Predicted: %{{y:.2f}}<extra></extra>'
-                            ))
-                        else:
-                            # No holdout data found, use regular display
-                            fig.add_trace(go.Scatter(
-                                x=model_data[selected_date_col],
-                                y=model_data['Predicted'],
-                                mode='lines+markers',
-                                name=f'{model} (R²={r2:.3f})',
-                                line=dict(color=color, width=2, dash='dash'),
-                                marker=dict(size=6, symbol='circle'),
-                                hovertemplate=f'<b>{model}</b><br>Date: %{{x}}<br>Predicted: %{{y:.2f}}<extra></extra>'
-                            ))
-                    else:
-                        # Non-RLS models: regular circles
-                        fig.add_trace(go.Scatter(
-                            x=model_data[selected_date_col],
-                            y=model_data['Predicted'],
-                            mode='lines+markers',
-                            name=f'{model} (R²={r2:.3f})',
-                            line=dict(color=color, width=2, dash='dash'),
-                            marker=dict(size=6, symbol='circle'),
-                            hovertemplate=f'<b>{model}</b><br>Date: %{{x}}<br>Predicted: %{{y:.2f}}<extra></extra>'
-                        ))
+                    fig.add_trace(go.Scatter(
+                        x=model_data[selected_date_col],
+                        y=model_data['Predicted'],
+                        mode='lines+markers',
+                        name=f'{model} (R²={r2:.3f})',
+                        line=dict(color=color, width=2, dash='dash'),
+                        marker=dict(size=6, symbol='circle'),
+                        hovertemplate=f'<b>{model}</b><br>Date: %{{x}}<br>Predicted: %{{y:.2f}}<extra></extra>'
+                    ))
 
 
                 # Update layout
@@ -1007,272 +885,6 @@ def main():
                 st.info("💡 No date/time column found in predictions. Please ensure your data has a date column for time series visualization.")
 
         # ═══════════════════════════════════════════════════════════════════════════
-        # RLS ANALYSIS DASHBOARD (independent section, always shown when RLS enabled)
-        # ═══════════════════════════════════════════════════════════════════════════
-        rls_enabled = st.session_state.get('enable_rls_flag', False)
-        ensemble_enabled = st.session_state.get('enable_ensemble_flag', False)
-        has_comparison = bool(st.session_state.get('rls_comparison_store'))
-        has_beta_history = bool(st.session_state.get('beta_history_store'))
-
-        # Debug info (you can remove this later)
-        if rls_enabled:
-            st.caption(f"🔍 Debug: RLS={rls_enabled}, Ensemble={ensemble_enabled}, Comparisons={len(st.session_state.get('rls_comparison_store', []))}, BetaHistories={len(st.session_state.get('beta_history_store', {}))}")
-
-        if rls_enabled and (has_comparison or has_beta_history):
-            st.markdown("---")
-            st.header("🔬 RLS Analysis Dashboard")
-
-            # Show info about what's being compared
-            if ensemble_enabled:
-                st.info("📌 **Ensemble + RLS Mode**: Comparing Static Ensemble (weeks 1-48) vs Ensemble + RLS (train 1-44 → warmup 45-48 → test 49-52)")
-            else:
-                st.info("📌 **Per-Model RLS Mode**: Comparing each model's static vs RLS performance on holdout period")
-
-            # Create tabs
-            tab1, tab2, tab3 = st.tabs([
-                "📊 Static vs RLS Comparison",
-                "📉 Prediction Visualization",
-                "📈 Beta Evolution Over Time"
-            ])
-
-            # TAB 1: STATIC VS RLS COMPARISON
-            with tab1:
-                if st.session_state.get('rls_comparison_store'):
-                    comparison_data = st.session_state.rls_comparison_store
-
-                    st.subheader("📊 Performance Comparison Table")
-                    if ensemble_enabled:
-                        st.caption("📌 **Ensemble Comparison**: Static Ensemble (trained on weeks 1-48) vs Ensemble + RLS (trained 1-44, warmed 45-48, tested 49-52)")
-                    else:
-                        st.caption("📌 **Per-Model Comparison**: Each model's static vs RLS performance on holdout period")
-
-                    comparison_df = pd.DataFrame([{
-                        'Group': rec['Group'],
-                        'Model': rec['Model'],
-                        'R² Static': f"{rec['R2_Static']:.4f}",
-                        'R² RLS': f"{rec['R2_RLS']:.4f}",
-                        'MAE Static': f"{rec['MAE_Static']:.2f}",
-                        'MAE RLS': f"{rec['MAE_RLS']:.2f}",
-                        'MAE Improve %': f"{((rec['MAE_Static'] - rec['MAE_RLS']) / (rec['MAE_Static'] + 1e-6) * 100):.1f}%",
-                        'RMSE Static': f"{rec['RMSE_Static']:.2f}",
-                        'RMSE RLS': f"{rec['RMSE_RLS']:.2f}"
-                    } for rec in comparison_data])
-
-                    st.dataframe(comparison_df, use_container_width=True)
-
-                    # Download button
-                    csv_comparison = comparison_df.to_csv(index=False).encode('utf-8')
-                    st.download_button(
-                        "📥 Download Comparison Table",
-                        csv_comparison,
-                        "rls_vs_static.csv",
-                        "text/csv",
-                        key='download_comparison'
-                    )
-
-                    # Summary metrics
-                    st.markdown("---")
-                    st.subheader("📈 Overall Summary")
-
-                    col1, col2, col3 = st.columns(3)
-
-                    with col1:
-                        avg_mae_static = np.mean([rec['MAE_Static'] for rec in comparison_data])
-                        st.metric("Avg MAE Static", f"{avg_mae_static:.2f}")
-
-                    with col2:
-                        avg_mae_rls = np.mean([rec['MAE_RLS'] for rec in comparison_data])
-                        improvement = ((avg_mae_static - avg_mae_rls) / avg_mae_static * 100) if avg_mae_static != 0 else 0
-                        st.metric("Avg MAE RLS", f"{avg_mae_rls:.2f}", delta=f"{-improvement:.1f}%")
-
-                    with col3:
-                        wins = sum(1 for rec in comparison_data if rec['MAE_RLS'] < rec['MAE_Static'])
-                        st.metric("RLS Wins", f"{wins}/{len(comparison_data)}")
-                else:
-                    st.info("No comparison data available. Run models with RLS enabled.")
-
-            # TAB 2: PREDICTION VISUALIZATION
-            with tab2:
-                if st.session_state.get('rls_comparison_store'):
-                    comparison_data = st.session_state.rls_comparison_store
-
-                    st.subheader("📉 Predictions: Static vs RLS vs Actual")
-                    st.caption("Visualize how well each approach predicted holdout weeks")
-
-                    # Selector
-                    comparison_options = [f"{rec['Group']} | {rec['Model']}" for rec in comparison_data]
-                    selected_comparison = st.selectbox(
-                        "Select Product/Brand + Model:",
-                        options=comparison_options,
-                        key='prediction_viz_selector'
-                    )
-
-                    selected_idx = comparison_options.index(selected_comparison)
-                    selected_rec = comparison_data[selected_idx]
-
-                    # Metrics cards
-                    col1, col2, col3 = st.columns(3)
-
-                    with col1:
-                        st.metric("MAE Static", f"{selected_rec['MAE_Static']:.2f}")
-                        st.metric("R² Static", f"{selected_rec['R2_Static']:.4f}")
-
-                    with col2:
-                        mae_delta = selected_rec['MAE_Static'] - selected_rec['MAE_RLS']
-                        st.metric("MAE RLS", f"{selected_rec['MAE_RLS']:.2f}", delta=f"{-mae_delta:.2f}")
-                        r2_delta = selected_rec['R2_RLS'] - selected_rec['R2_Static']
-                        st.metric("R² RLS", f"{selected_rec['R2_RLS']:.4f}", delta=f"{r2_delta:.4f}")
-
-                    with col3:
-                        improvement = ((selected_rec['MAE_Static'] - selected_rec['MAE_RLS']) / (selected_rec['MAE_Static'] + 1e-6) * 100)
-                        st.metric("MAE Improvement", f"{improvement:.1f}%")
-                        winner = "🏆 RLS" if selected_rec['MAE_RLS'] < selected_rec['MAE_Static'] else "📊 Static"
-                        st.metric("Winner", winner)
-
-                    # Chart
-                    fig_comp = go.Figure()
-
-                    fig_comp.add_trace(go.Scatter(
-                        x=selected_rec['Dates'],
-                        y=selected_rec['Actuals'],
-                        mode='lines+markers',
-                        name='Actual',
-                        line=dict(color='black', width=3),
-                        marker=dict(size=12, symbol='circle')
-                    ))
-
-                    fig_comp.add_trace(go.Scatter(
-                        x=selected_rec['Dates'],
-                        y=selected_rec['Predictions_Static'],
-                        mode='lines+markers',
-                        name='Static (Frozen Betas)',
-                        line=dict(color='blue', width=2, dash='dash'),
-                        marker=dict(size=10, symbol='square')
-                    ))
-
-                    fig_comp.add_trace(go.Scatter(
-                        x=selected_rec['Dates'],
-                        y=selected_rec['Predictions_RLS'],
-                        mode='lines+markers',
-                        name='RLS (Adaptive Betas)',
-                        line=dict(color='green', width=2),
-                        marker=dict(size=10, symbol='diamond')
-                    ))
-
-                    fig_comp.update_layout(
-                        title=f"Prediction Comparison: {selected_comparison}",
-                        xaxis_title="Holdout Week",
-                        yaxis_title="Target Value",
-                        height=500,
-                        hovermode='x unified',
-                        showlegend=True
-                    )
-
-                    st.plotly_chart(fig_comp, use_container_width=True)
-                else:
-                    st.info("No prediction data available.")
-
-            # TAB 3: BETA EVOLUTION
-            with tab3:
-                if st.session_state.get('beta_history_store'):
-                    beta_history_store = st.session_state.beta_history_store
-
-                    if len(beta_history_store) > 0:
-                        st.subheader("📈 Coefficient Evolution: Training → Warmup → Holdout")
-                        st.caption("Complete beta adaptation timeline showing warmup stabilization and holdout testing")
-
-                        # Selector
-                        available_combos = sorted(list(beta_history_store.keys()))
-                        selected_combo = st.selectbox(
-                            "Select Product/Brand + Model:",
-                            options=available_combos,
-                            key='beta_time_combo'
-                        )
-
-                        beta_data = beta_history_store[selected_combo]
-                        feature_names = beta_data['feature_names']
-                        warmup_snapshots = beta_data.get('warmup_beta_snapshots', [])
-                        holdout_snapshots = beta_data.get('holdout_beta_snapshots', [])
-                        n_warmup = beta_data.get('n_warmup', 0)
-                        n_holdout = beta_data.get('n_holdout', 0)
-
-                        # Build complete timeline
-                        all_snapshots = warmup_snapshots + holdout_snapshots[1:]  # Skip duplicate at boundary
-
-                        # Time labels
-                        time_labels = (
-                            ["Initial (Week 44)"] +
-                            [f"Warmup Week {i+1}" for i in range(n_warmup)] +
-                            [f"Holdout Week {i+1}" for i in range(n_holdout)]
-                        )
-
-                        # Chart
-                        fig_beta_time = go.Figure()
-                        colors_beta = px.colors.qualitative.Set2
-
-                        for i, feature in enumerate(feature_names):
-                            values = [snapshot[i] for snapshot in all_snapshots]
-
-                            fig_beta_time.add_trace(go.Scatter(
-                                x=time_labels,
-                                y=values,
-                                mode='lines+markers',
-                                name=feature,
-                                line=dict(color=colors_beta[i % len(colors_beta)], width=2),
-                                marker=dict(size=8),
-                                hovertemplate=f'<b>{feature}</b><br>%{{x}}<br>Beta: %{{y:.4f}}<extra></extra>'
-                            ))
-
-                        # Add vertical lines to separate phases
-                        fig_beta_time.add_vline(
-                            x=n_warmup,
-                            line_dash="dash",
-                            line_color="orange",
-                            annotation_text="Warmup Ends"
-                        )
-
-                        fig_beta_time.add_vline(
-                            x=n_warmup + 0.5,
-                            line_dash="dash",
-                            line_color="red",
-                            annotation_text="Holdout Testing Starts"
-                        )
-
-                        fig_beta_time.update_layout(
-                            title=f"Beta Evolution: {selected_combo}",
-                            xaxis_title="Time Period",
-                            yaxis_title="Coefficient Value",
-                            height=600,
-                            hovermode='x unified',
-                            showlegend=True
-                        )
-
-                        st.plotly_chart(fig_beta_time, use_container_width=True)
-
-                        # Summary table with 3 phases
-                        st.markdown("---")
-                        st.subheader("📋 Beta Changes Across Phases")
-
-                        initial_betas = all_snapshots[0]
-                        after_warmup_betas = all_snapshots[n_warmup]
-                        final_betas = all_snapshots[-1]
-
-                        summary_df = pd.DataFrame({
-                            'Feature': feature_names,
-                            'Initial (Week 44)': initial_betas,
-                            'After Warmup (Week 48)': after_warmup_betas,
-                            'Final (Week 52)': final_betas,
-                            'Warmup Change': after_warmup_betas - initial_betas,
-                            'Holdout Change': final_betas - after_warmup_betas,
-                            'Total Change': final_betas - initial_betas
-                        })
-
-                        summary_df = summary_df.round(4)
-                        st.dataframe(summary_df, use_container_width=True)
-                    else:
-                        st.info("No beta history available.")
-                else:
-                    st.info("Beta tracking not available. Enable RLS and run models.")
 
 
 if __name__ == "__main__":
