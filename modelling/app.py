@@ -656,13 +656,17 @@ class RecursiveLeastSquares(BaseEstimator, RegressorMixin):
             XtX = X_with_intercept.T @ X_with_intercept
             n_params = XtX.shape[0]
             
-            # CRITICAL FIX: For pre-trained models, use smaller P for stability
+            # CRITICAL FIX: Better P initialization for stability
             if initial_beta is not None and initial_intercept is not None:
-                # Pre-trained model: Use inverse of data covariance for more stable updates
-                regularization = 0.01 * np.eye(n_params)
+                # Pre-trained model: Use VERY conservative P for minimal drift
+                # P represents uncertainty - low uncertainty = small updates
+                regularization = 1.0 * np.eye(n_params)  # Increased regularization
                 self.P = np.linalg.inv(XtX / len(X) + regularization)
+                
+                # Scale down P to make updates more conservative
+                self.P = self.P * 0.1  # Make updates 10x smaller
             else:
-                # Fresh start: Use larger P for faster learning
+                # Fresh start: Use moderate P
                 self.P = self.initial_P * np.eye(n_params)
             
         except np.linalg.LinAlgError:
@@ -701,39 +705,50 @@ class RecursiveLeastSquares(BaseEstimator, RegressorMixin):
         y_pred = x_t @ self.beta
         error = y_t - y_pred
         
-        # RLS update: K = P @ x / (λ + x.T @ P @ x)
+        # CRITICAL FIX: Correct RLS update formula
+        # K = (P @ x) / (λ + x.T @ P @ x)
         P_x = self.P @ x_t_col
-        denominator = self.forgetting_factor + (x_t_col.T @ self.P @ x_t_col)[0, 0]
-        denominator = max(denominator, 1e-8)  # Numerical stability
+        denominator = self.forgetting_factor + (x_t_col.T @ P_x)[0, 0]
+        denominator = max(denominator, 1e-10)  # Numerical stability
         K = P_x / denominator
         
         # Update beta: beta = beta + K * error
         beta_update = (K * error).flatten()
         
-        # Clip extremely large updates
-        max_update = 10.0
+        # FIXED: More reasonable clipping based on current beta magnitude
+        max_update = max(10.0, np.abs(self.beta).max() * 0.5)  # Allow 50% change max
         if np.abs(beta_update).max() > max_update:
             beta_update = np.clip(beta_update, -max_update, max_update)
         
         self.beta += beta_update
         
-        # Clip beta values to prevent explosion
-        max_beta = 1000.0
+        # FIXED: More reasonable beta clipping
+        max_beta = 10000.0  # Increased from 1000
         if np.abs(self.beta).max() > max_beta:
             self.beta = np.clip(self.beta, -max_beta, max_beta)
         
-        # Apply constraints
+        # Apply constraints BEFORE updating P (important!)
         self._apply_constraints()
         
-        # Update P matrix: P_new = (1/λ) * (P - K @ x.T @ P)
-        P_new = (1.0 / self.forgetting_factor) * self.P
-        P_new = P_new - K @ (x_t_col.T @ P_new)
+        # CRITICAL FIX: Correct P matrix update formula
+        # P_new = (1/λ) * (P - (P @ x @ x.T @ P) / (λ + x.T @ P @ x))
+        # Simplified: P_new = (1/λ) * (P - K @ x.T @ P)
+        self.P = (1.0 / self.forgetting_factor) * (self.P - K @ x_t_col.T @ self.P)
         
-        # Numerical stability
-        max_P_value = 100.0
-        P_new = np.clip(P_new, -max_P_value, max_P_value)
-        P_new = P_new + 0.01 * np.eye(len(P_new))
-        self.P = P_new
+        # FIXED: Better numerical stability for P matrix
+        # Ensure P remains symmetric and positive definite
+        self.P = (self.P + self.P.T) / 2  # Force symmetry
+        
+        # Add small regularization to maintain positive definiteness
+        min_eigenval = np.min(np.linalg.eigvalsh(self.P))
+        if min_eigenval < 1e-6:
+            self.P += (1e-6 - min_eigenval + 1e-8) * np.eye(len(self.P))
+        
+        # Prevent P from growing too large
+        max_P_trace = 1000.0
+        current_trace = np.trace(self.P)
+        if current_trace > max_P_trace:
+            self.P = self.P * (max_P_trace / current_trace)
         
         # Track history
         self.beta_history_.append(self.beta.copy())
@@ -790,6 +805,18 @@ class RecursiveLeastSquares(BaseEstimator, RegressorMixin):
     def get_beta_history(self):
         """Return history of beta estimates"""
         return np.array(self.beta_history_)
+    
+    def get_diagnostics(self):
+        """Return diagnostic information about RLS state"""
+        return {
+            'current_beta': self.beta.copy(),
+            'P_trace': np.trace(self.P),
+            'P_condition_number': np.linalg.cond(self.P),
+            'P_min_eigenvalue': np.min(np.linalg.eigvalsh(self.P)),
+            'P_max_eigenvalue': np.max(np.linalg.eigvalsh(self.P)),
+            'beta_magnitude': np.linalg.norm(self.beta),
+            'n_updates': len(self.beta_history_) - 1
+        }
 
 
 def apply_rls_on_holdout(trained_model, X_train, y_train, 
@@ -973,7 +1000,9 @@ def safe_mape(y_true, y_pred):
 
 # Default grid of RLS forgetting factors for automatic tuning
 # FIXED: Use higher values (less forgetting) for more stable updates
-DEFAULT_RLS_LAMBDA_GRID = [0.95, 0.96, 0.97, 0.98, 0.99, 0.995, 0.999, 1.0]
+# Values closer to 1.0 = more stable, less adaptation
+# Values closer to 0.95 = more adaptation, less stable
+DEFAULT_RLS_LAMBDA_GRID = [0.97, 0.98, 0.99, 0.995, 0.998, 0.999, 1.0]
 
 
 # ═══════════════════════════════════════════════════════════════════════════
