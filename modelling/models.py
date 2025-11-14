@@ -170,6 +170,10 @@ class ConstrainedLinearRegression(BaseEstimator, RegressorMixin):
         return X.dot(self.W) + self.b
 
 
+import numpy as np
+from sklearn.base import BaseEstimator, RegressorMixin
+
+
 class RecursiveLeastSquaresRegressor(BaseEstimator, RegressorMixin):
     """Recursive Least Squares estimator with optional forgetting factor.
 
@@ -177,26 +181,24 @@ class RecursiveLeastSquaresRegressor(BaseEstimator, RegressorMixin):
     ----------
     forgetting_factor : float, default=1.0
         RLS forgetting factor λ in (0, 1]. Use <1.0 for exponential forgetting.
-    initial_covariance : float, default=1e4
+    initial_covariance : float, default=1e3
         Initial diagonal value for the covariance matrix P0 = initial_covariance * I.
     fit_intercept : bool, default=True
         If True, model includes an intercept term.
     store_history : bool, default=False
         If True, stores coefficient and intercept history after each update.
-    epsilon : float, default=1e-8
+    epsilon : float, default=1e-6
         Small number to guard against division by zero in the gain computation.
     """
 
     def __init__(
         self,
         forgetting_factor: float = 1.0,
-        initial_covariance: float = 1e3,   # ↓ from 1e4
+        initial_covariance: float = 1e3,
         fit_intercept: bool = True,
         store_history: bool = False,
-        epsilon: float = 1e-6,             # ↑ from 1e-8
+        epsilon: float = 1e-6,
     ):
-
-
         if not 0 < forgetting_factor <= 1:
             raise ValueError("forgetting_factor must be in (0, 1]")
         if initial_covariance <= 0:
@@ -211,6 +213,20 @@ class RecursiveLeastSquaresRegressor(BaseEstimator, RegressorMixin):
     # --------------------------- public API ---------------------------
 
     def fit(self, X, y):
+        """Fit the RLS model to training data.
+        
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features) or (n_samples,)
+            Training data.
+        y : array-like of shape (n_samples,)
+            Target values.
+            
+        Returns
+        -------
+        self : object
+            Fitted estimator.
+        """
         X_array = self._prepare_features(X)
         y_array = np.asarray(y, dtype=float).reshape(-1)
 
@@ -234,7 +250,20 @@ class RecursiveLeastSquaresRegressor(BaseEstimator, RegressorMixin):
         return self
 
     def update(self, X_new, y_new):
-        """Online/batch update with new observations."""
+        """Online/batch update with new observations.
+        
+        Parameters
+        ----------
+        X_new : array-like of shape (n_samples, n_features) or (n_samples,)
+            New training data.
+        y_new : array-like of shape (n_samples,)
+            New target values.
+            
+        Returns
+        -------
+        self : object
+            Updated estimator.
+        """
         if not hasattr(self, '_theta'):
             raise RuntimeError("Model must be fitted before calling update().")
 
@@ -250,11 +279,45 @@ class RecursiveLeastSquaresRegressor(BaseEstimator, RegressorMixin):
         self._synchronize_public_coefficients()
         return self
 
-    # Optional sklearn alias
     def partial_fit(self, X, y):
-        return self.update(X, y)
+        """Incremental fit on a batch of samples.
+        
+        This method is expected to be called several times consecutively
+        on different chunks of a dataset. If the model is not fitted yet,
+        it initializes the model first.
+        
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features) or (n_samples,)
+            Training data.
+        y : array-like of shape (n_samples,)
+            Target values.
+            
+        Returns
+        -------
+        self : object
+            Updated estimator.
+        """
+        if not hasattr(self, '_theta'):
+            # First call - initialize the model
+            return self.fit(X, y)
+        else:
+            # Already fitted - update
+            return self.update(X, y)
 
     def predict(self, X):
+        """Predict using the RLS model.
+        
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features) or (n_samples,)
+            Samples.
+            
+        Returns
+        -------
+        y_pred : ndarray of shape (n_samples,)
+            Predicted values.
+        """
         if not hasattr(self, 'coef_'):
             raise RuntimeError("Model must be fitted before calling predict().")
 
@@ -274,6 +337,7 @@ class RecursiveLeastSquaresRegressor(BaseEstimator, RegressorMixin):
     # --------------------------- internals ---------------------------
 
     def _prepare_features(self, X):
+        """Prepare feature matrix, optionally adding intercept column."""
         X_array = np.asarray(X, dtype=float)
 
         if X_array.ndim == 1:
@@ -291,6 +355,7 @@ class RecursiveLeastSquaresRegressor(BaseEstimator, RegressorMixin):
         return X_array
 
     def _update_single(self, x_vec, y_val):
+        """Perform a single RLS update step."""
         # Gain
         px = self._covariance @ x_vec
         denom = self.forgetting_factor + float(x_vec.dot(px))
@@ -317,6 +382,7 @@ class RecursiveLeastSquaresRegressor(BaseEstimator, RegressorMixin):
                 self.coef_history_.append(self._theta.copy())
 
     def _synchronize_public_coefficients(self):
+        """Sync internal _theta to public coef_ and intercept_ attributes."""
         if self.fit_intercept:
             self.intercept_ = float(self._theta[0])
             self.coef_ = self._theta[1:].astype(float, copy=True)
@@ -344,6 +410,11 @@ class StackedInteractionModel(BaseEstimator, RegressorMixin):
 
         if groups_df is None:
             raise ValueError("groups_df is required for stacked models")
+        
+        # Validate dimensions
+        X_array = X.values if hasattr(X, 'values') else X
+        if len(X_array) != len(groups_df):
+            raise ValueError(f"X and groups_df must have same length: X has {len(X_array)} rows, groups_df has {len(groups_df)} rows")
 
         if not self.group_keys:
             self.fitted_model = clone(self.base_model)
@@ -463,14 +534,21 @@ class StackedInteractionModel(BaseEstimator, RegressorMixin):
                                     model.W[f_idx] += correction
                                     if interaction_idx is not None and interaction_idx < len(model.W):
                                         model.W[interaction_idx] += correction
-        except Exception:
-            pass
+        except (AttributeError, IndexError, KeyError) as e:
+            # Constraint enforcement failed - log but continue with unconstrained model
+            import warnings
+            warnings.warn(f"Combined constraint enforcement failed: {str(e)}. Using unconstrained model.")
 
         return model
 
     def predict(self, X, groups_df=None):
         if groups_df is None:
             raise ValueError("groups_df is required for prediction")
+        
+        # Validate dimensions
+        X_array = X.values if hasattr(X, 'values') else X
+        if len(X_array) != len(groups_df):
+            raise ValueError(f"X and groups_df must have same length: X has {len(X_array)} rows, groups_df has {len(groups_df)} rows")
 
         if not self.group_keys or not self.group_mapping:
             return self.fitted_model.predict(X)
